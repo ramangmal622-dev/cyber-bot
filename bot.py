@@ -64,6 +64,17 @@ def init_db():
         )
     """)
     
+    # جدول الأقسام الفرعية الديناميكية الجديدة
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS custom_sub_sections (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            main_type TEXT NOT NULL,
+            sec_key TEXT NOT NULL,
+            sec_name TEXT NOT NULL
+        )
+    """)
+    
+    # جدول المحتوى ليشمل تكلفة النقاط (points_cost)
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS content (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -72,6 +83,7 @@ def init_db():
             item_name TEXT NOT NULL,
             file_id TEXT NOT NULL,
             file_type TEXT NOT NULL,
+            points_cost INTEGER DEFAULT 0,
             uploaded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """)
@@ -135,13 +147,24 @@ main_sections = {
     "malware": "🛡️ هندسة التحليل العكسي للماوير"
 }
 
-sub_sections = {
+# الأقسام الافتراضية الثابتة (يمكن تعديل أسمائها عبر قاعدة البيانات الموحدة للأقسام)
+base_sub_sections = {
     "pdf": {"net_sec": "📁 تأمين الشبكات والبروتوكولات المعقدة", "web_sec": "📁 ثغرات الـ Web العميقة والأمن العالي", "crypto": "📁 علم التشفير المتقدم والـ ECC"},
     "tools": {"recon": "🛠️ أدوات الاستطلاع والـ OSINT السرية", "exploit": "🛠️ إطارات وكور ثغرات الـ Zero-Day", "defend": "🛠️ أنظمة الدفاع والتصدّي الذكي"},
     "labs": {"ctf_easy": "💻 تحديات المبتدئين (Easy CTF)", "ctf_hard": "💻 تحديات الماستر (Advanced Pwn/Rev)", "forensics": "💻 التحقيق الجنائي الرقمي والطب الشرعي"},
     "videos": {"linux_adv": "🎬 احتراف هندسة لينكس والسكربتات الخفية", "pentest_full": "🎬 دبلوم اختبار الهجوم السيبراني الشامل"},
     "malware": {"static_an": "🛡️ التحليل الثابت العكسي للبرمجيات", "dynamic_an": "🛡️ التحليل الديناميكي والعزل في الـ Sandbox"}
 }
+
+def get_all_sub_sections(main_type):
+    subs = dict(base_sub_sections.get(main_type, {}))
+    conn = sqlite3.connect("dark_cyber_academy.db")
+    cursor = conn.cursor()
+    cursor.execute("SELECT sec_key, sec_name FROM custom_sub_sections WHERE main_type = ?", (main_type,))
+    for row in cursor.fetchall():
+        subs[row[0]] = row[1]
+    conn.close()
+    return subs
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
@@ -152,14 +175,14 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     conn = sqlite3.connect("dark_cyber_academy.db")
     cursor = conn.cursor()
-    cursor.execute("SELECT student_id, name FROM students WHERE user_id = ?", (user_id,))
+    cursor.execute("SELECT student_id, name, points FROM students WHERE user_id = ?", (user_id,))
     student_row = cursor.fetchone()
     conn.close()
 
     if not student_row and not role:
         admin_state[user_id] = {"action": "wait_self_registration_name"}
         await update.message.reply_text(
-            "🥷 **مرحباً بك في أكاديمية الأمن السيبراني (Cyber-Ops Empire v4.3)**\n\n"
+            "🥷 **مرحباً بك في أكاديمية الأمن السيبراني (Cyber-Ops Empire v4.4)**\n\n"
             "أنت تسجل لأول مرة في النظام. يرجى كتابة **اسمك الثلاثي** لحفظه في قاعدة البيانات وتوليد الآيدي الخاص بك:"
         )
         return
@@ -179,7 +202,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     welcome_msg = f"🥷 **أهلاً بك مجدداً في المحطة المركزية**"
     if student_row:
-        welcome_msg = f"🥷 **أهلاً بك أيها المتدرب ({student_row[1]})**\n🆔 الآيدي الخاص بك: `{student_row[0]}`"
+        welcome_msg = f"🥷 **أهلاً بك أيها المتدرب ({student_row[1]})**\n🆔 الآيدي: `{student_row[0]}` | ⭐ رصيدك: `{student_row[2]}` نقطة"
 
     await update.message.reply_text(welcome_msg, reply_markup=reply_markup, parse_mode="Markdown")
 
@@ -246,7 +269,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     elif data.startswith("main_"):
         main_type = data.replace("main_", "")
-        sections_dict = sub_sections.get(main_type, {})
+        sections_dict = get_all_sub_sections(main_type)
         
         conn = sqlite3.connect("dark_cyber_academy.db")
         cursor = conn.cursor()
@@ -266,8 +289,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         conn = sqlite3.connect("dark_cyber_academy.db")
         cursor = conn.cursor()
-        # جلب الـ ID الخاص بالعنصر واسمه لضمان التحميل السليم تماماً
-        cursor.execute("SELECT id, item_name FROM content WHERE main_type = ? AND sec_key = ?", (main_type, sec_key))
+        cursor.execute("SELECT id, item_name, points_cost FROM content WHERE main_type = ? AND sec_key = ?", (main_type, sec_key))
         items = cursor.fetchall()
         conn.close()
         
@@ -276,42 +298,67 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             keyboard.append([InlineKeyboardButton("⚠️ القطاع فارغ حالياً", callback_data="none")])
         else:
             for item in items:
-                row_id, item_name = item
-                # نستخدم ID الرقمي لضمان عدم حدوث أي خطأ في أسماء الملفات أو المسافات
-                keyboard.append([InlineKeyboardButton(f"📥 {item_name}", callback_data=f"getfile_{row_id}")])
+                row_id, item_name, p_cost = item
+                cost_label = f"🔓 [مجاني]" if p_cost == 0 else f"🔐 [🛒 {p_cost} نقطة]"
+                keyboard.append([InlineKeyboardButton(f"{item_name} {cost_label}", callback_data=f"getfile_{row_id}")])
         
         keyboard.append([InlineKeyboardButton("⬅️ رجوع للأقسام", callback_data=f"main_{main_type}")])
-        await query.edit_message_text(text="اختر العنصر لتحميله بآمان تام:", reply_markup=InlineKeyboardMarkup(keyboard))
+        await query.edit_message_text(text="اختر العنصر لتحميله (الملفات المقفلة تتطلب رصيد نقاط):", reply_markup=InlineKeyboardMarkup(keyboard))
 
     elif data.startswith("getfile_"):
         file_row_id = data.replace("getfile_", "")
         
         conn = sqlite3.connect("dark_cyber_academy.db")
         cursor = conn.cursor()
-        cursor.execute("SELECT file_id, file_type, item_name FROM content WHERE id = ?", (file_row_id,))
+        cursor.execute("SELECT file_id, file_type, item_name, points_cost FROM content WHERE id = ?", (file_row_id,))
         row = cursor.fetchone()
+        
+        if not row:
+            conn.close()
+            await query.message.reply_text("❌ لم يتم العثور على الملف في قاعدة البيانات.")
+            return
+            
+        f_id, f_type, item_name, p_cost = row
+        
+        if p_cost > 0:
+            cursor.execute("SELECT student_id, points FROM students WHERE user_id = ?", (user_id,))
+            st_row = cursor.fetchone()
+            if not st_row:
+                conn.close()
+                await query.answer("مرفوض! يجب أن تكون طالباً مسجلاً لتنزيل الملفات المقفلة.", show_alert=True)
+                return
+            
+            st_id, current_pts = st_row
+            if current_pts < p_cost:
+                conn.close()
+                await query.answer(f"❌ رصيدك الحالي ({current_pts} نقطة) لا يكفي لشراء هذا الملف! التكلفة المطلوبة: {p_cost} نقطة.", show_alert=True)
+                return
+            
+            new_pts = current_pts - p_cost
+            cursor.execute("UPDATE students SET points = ? WHERE student_id = ?", (new_pts, st_id))
+            conn.commit()
+            
         conn.close()
         
-        if row:
-            f_id, f_type, item_name = row
-            await query.message.reply_text(f"🔄 جاري سحب وإرسال الملف المطلوب ({item_name})...")
-            try:
-                if f_type == "document":
-                    await context.bot.send_document(chat_id=query.message.chat_id, document=f_id)
-                elif f_type == "photo":
-                    await context.bot.send_photo(chat_id=query.message.chat_id, photo=f_id)
-                elif f_type == "video":
-                    await context.bot.send_video(chat_id=query.message.chat_id, video=f_id)
-            except Exception as e:
-                await query.message.reply_text(f"⚠️ تعذر إرسال الملف (قد يكون الـ File ID غير صالح أو منتهياً): {e}")
-        else:
-            await query.message.reply_text("❌ لم يتم العثور على الملف في قاعدة البيانات.")
+        cost_msg = f" (تم خصم {p_cost} نقطة بنجاح)" if p_cost > 0 else ""
+        await query.message.reply_text(f"🔄 جاري سحب وإرسال الملف المطلوب ({item_name}){cost_msg}...")
+        try:
+            if f_type == "document":
+                await context.bot.send_document(chat_id=query.message.chat_id, document=f_id)
+            elif f_type == "photo":
+                await context.bot.send_photo(chat_id=query.message.chat_id, photo=f_id)
+            elif f_type == "video":
+                await context.bot.send_video(chat_id=query.message.chat_id, video=f_id)
+        except Exception as e:
+            await query.message.reply_text(f"⚠️ تعذر إرسال الملف: {e}")
 
     elif data == "admin_main":
         if not role:
             await query.answer("مرفوض! هذه المنطقة خاصة بالسيد والمشرفين فقط.", show_alert=True)
             return
         keyboard = [
+            [InlineKeyboardButton("➕ إضافة فرع/قسم جديد داخل الأقسام", callback_data="admin_add_sub_section")],
+            [InlineKeyboardButton("✏️ تعديل وإعادة تسمية الأقسام والفروع", callback_data="admin_rename_sub_section")],
             [InlineKeyboardButton("📢 البث الإذاعي الشامل لجميع الرعية", callback_data="admin_broadcast_prompt")],
             [InlineKeyboardButton("🧠 زرع تحدي واختبار سيبراني (Quiz)", callback_data="admin_add_quiz")],
             [InlineKeyboardButton("📤 رفع أداة أو ملف استخباراتي جديد", callback_data="upload_choose_main")],
@@ -322,6 +369,48 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             [InlineKeyboardButton("⬅️ رجوع للرئيسية", callback_data="back_home")]
         ]
         await query.edit_message_text(text=f"👑 **غرفة القيادة العليا (مستوى السيادة: {role}):**", reply_markup=InlineKeyboardMarkup(keyboard))
+
+    elif data == "admin_add_sub_section":
+        if not role:
+            return
+        keyboard = [[InlineKeyboardButton(f"إضافة فرع في: {n}", callback_data=f"addsecmain_{k}")] for k, n in main_sections.items()]
+        keyboard.append([InlineKeyboardButton("⬅️ رجوع", callback_data="admin_main")])
+        await query.edit_message_text(text="📁 **اختر القسم الرئيسي المراد إضافة فرع جديد إليه:**", reply_markup=InlineKeyboardMarkup(keyboard))
+
+    elif data.startswith("addsecmain_"):
+        if not role:
+            return
+        m_type = data.replace("addsecmain_", "")
+        admin_state[user_id] = {"action": "wait_new_sub_section", "main_type": m_type}
+        await query.message.reply_text("➕ أرسل الآن اسم الفرع الجديد ومعرفه (Key) بالصيغة التالية:\n`المفتاح | اسم الفرع`\nمثال: `ai_tools | أدوات الذكاء الاصطناعي السيبراني`")
+
+    # === ميزة إعادة تسمية الأقسام الجديدة ===
+    elif data == "admin_rename_sub_section":
+        if not role:
+            return
+        keyboard = [[InlineKeyboardButton(f"تعديل أقسام: {n}", callback_data=f"renmain_{k}")] for k, n in main_sections.items()]
+        keyboard.append([InlineKeyboardButton("⬅️ رجوع", callback_data="admin_main")])
+        await query.edit_message_text(text="✏️ **اختر القسم الرئيسي لعرض فروعه وإعادة تسميتها:**", reply_markup=InlineKeyboardMarkup(keyboard))
+
+    elif data.startswith("renmain_"):
+        if not role:
+            return
+        m_type = data.replace("renmain_", "")
+        subs = get_all_sub_sections(m_type)
+        keyboard = []
+        for sk, name in subs.items():
+            keyboard.append([InlineKeyboardButton(f"✏️ {name}", callback_data=f"renpick_{m_type}_{sk}")])
+        keyboard.append([InlineKeyboardButton("⬅️ رجوع", callback_data="admin_rename_sub_section")])
+        await query.edit_message_text(text="اختر الفرع المراد تغيير اسمه:", reply_markup=InlineKeyboardMarkup(keyboard))
+
+    elif data.startswith("renpick_"):
+        if not role:
+            return
+        parts = data.split("_", 2)
+        m_type, sk = parts[1], parts[2]
+        admin_state[user_id] = {"action": "wait_rename_sub_section", "main_type": m_type, "sec_key": sk}
+        await query.message.reply_text("✏️ أرسل الآن **الاسم الجديد** لهذا الفرع:\nمثال: `📁 تأمين السيرفرات والسحابيات المتقدمة`")
+    # ========================================
 
     elif data == "admin_delete_menu":
         if not role:
@@ -484,15 +573,16 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not role:
             return
         keyboard = [[InlineKeyboardButton(f"رفع في: {n}", callback_data=f"upmain_{k}")] for k, n in main_sections.items()]
-        keyboard.append([InlineKeyboardButton("⬅️ رجوع", callback_data="admin_main")])
+        keyboard.append([InlineKeyboardButton("⬅️ رجوع", callback_data="admin_main")]]
         await query.edit_message_text(text="اختر قطاع الرفع:", reply_markup=InlineKeyboardMarkup(keyboard))
 
     elif data.startswith("upmain_"):
         if not role:
             return
         m_type = data.replace("upmain_", "")
-        keyboard = [[InlineKeyboardButton(n, callback_data=f"uptarget_{m_type}_{sk}")] for sk, n in sub_sections.get(m_type, {}).items()]
-        keyboard.append([InlineKeyboardButton("⬅️ رجوع", callback_data="upload_choose_main")])
+        subs = get_all_sub_sections(m_type)
+        keyboard = [[InlineKeyboardButton(n, callback_data=f"uptarget_{m_type}_{sk}")] for sk, n in subs.items()]
+        keyboard.append([InlineKeyboardButton("⬅️ رجوع", callback_data="upload_choose_main")]]
         await query.edit_message_text(text="اختر الفرع المحدد:", reply_markup=InlineKeyboardMarkup(keyboard))
 
     elif data.startswith("uptarget_"):
@@ -500,7 +590,12 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         parts = data.split("_", 2)
         admin_state[user_id] = {"action": "upload_file", "main_type": parts[1], "sec_key": parts[2]}
-        await query.message.reply_text("📥 أرسل الآن الملف أو الأداة (مع كتابة اسم العنصر في الـ Caption):")
+        await query.message.reply_text(
+            "📥 أرسل الآن الملف أو الأداة.\n"
+            "• في خانة التعليق (Caption) اكتب: `اسم الملف | تكلفة النقاط`\n"
+            "• مثال مجاني: `كتاب الاختراق المتقدم | 0`\n"
+            "• مثال بمقابل نقاط: `أداة الفحص الخطيرة | 25`"
+        )
 
     elif data == "back_home":
         if user_id in admin_state:
@@ -508,7 +603,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         conn = sqlite3.connect("dark_cyber_academy.db")
         cursor = conn.cursor()
-        cursor.execute("SELECT student_id, name FROM students WHERE user_id = ?", (user_id,))
+        cursor.execute("SELECT student_id, name, points FROM students WHERE user_id = ?", (user_id,))
         student_row = cursor.fetchone()
         conn.close()
 
@@ -526,7 +621,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup = InlineKeyboardMarkup(keyboard)
         welcome_msg = f"🥷 **أهلاً بك مجدداً في المحطة المركزية**"
         if student_row:
-            welcome_msg = f"🥷 **أهلاً بك أيها المتدرب ({student_row[1]})**\n🆔 الآيدي الخاص بك: `{student_row[0]}`"
+            welcome_msg = f"🥷 **أهلاً بك أيها المتدرب ({student_row[1]})**\n🆔 الآيدي: `{student_row[0]}` | ⭐ رصيدك: `{student_row[2]}` نقطة"
 
         await query.edit_message_text(text=welcome_msg, reply_markup=reply_markup, parse_mode="Markdown")
 
@@ -540,7 +635,49 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text or ""
     role = get_user_role(user_id)
 
-    if action == "wait_self_registration_name":
+    if action == "wait_new_sub_section" and role:
+        parts = [p.strip() for p in text.split("|")]
+        if len(parts) != 2:
+            await update.message.reply_text("⚠️ الصيغة خاطئة. أرسل هكذا: `المفتاح | اسم الفرع`\nمثال: `ai_tools | أدوات الذكاء الاصطناعي`")
+            return
+        sec_key, sec_name = parts[0], parts[1]
+        m_type = state_data.get("main_type")
+        
+        conn = sqlite3.connect("dark_cyber_academy.db")
+        cursor = conn.cursor()
+        cursor.execute("INSERT INTO custom_sub_sections (main_type, sec_key, sec_name) VALUES (?, ?, ?)", (m_type, sec_key, sec_name))
+        conn.commit()
+        conn.close()
+        
+        del admin_state[user_id]
+        await update.message.reply_text(f"✅ **تم إنشاء القسم الفرعي الجديد ({sec_name}) بنجاح!**")
+
+    # === معالجة حفظ إعادة التسمية الجديدة ===
+    elif action == "wait_rename_sub_section" and role:
+        new_name = text.strip()
+        m_type = state_data.get("main_type")
+        sk = state_data.get("sec_key")
+        
+        conn = sqlite3.connect("dark_cyber_academy.db")
+        cursor = conn.cursor()
+        # فحص هل القسم الفرعي موجود في الجدول المخصص أم افتراضي
+        cursor.execute("SELECT id FROM custom_sub_sections WHERE main_type = ? AND sec_key = ?", (m_type, sk))
+        row = cursor.fetchone()
+        
+        if row:
+            cursor.execute("UPDATE custom_sub_sections SET sec_name = ? WHERE main_type = ? AND sec_key = ?", (new_name, m_type, sk))
+        else:
+            # إذا كان القسم أساسي افتراضي وغير موجود في الجدول المخصص، نقوم بإضافته لتعديل اسمه واعتማده
+            cursor.execute("INSERT INTO custom_sub_sections (main_type, sec_key, sec_name) VALUES (?, ?, ?)", (m_type, sk, new_name))
+            
+        conn.commit()
+        conn.close()
+        
+        del admin_state[user_id]
+        await update.message.reply_text(f"✅ **تم تحديث وإعادة تسمية القسم بنجاح إلى:**\n`{new_name}`", parse_mode="Markdown")
+    # ========================================
+
+    elif action == "wait_self_registration_name":
         name = text.strip()
         if len(name) < 3:
             await update.message.reply_text("⚠️ الاسم قصير جداً. يرجى كتابة الاسم الثلاثي الصحيح:")
@@ -562,7 +699,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"احتفظ بالآيدي الخاص بك جيداً للاستعلام ولتسليم المهام."
             )
         except Exception as e:
-            await update.message.reply_text(f"⚠️ حدث خطأ أثناء التسجيل (ربما حسابك مسجل مسبقاً): {e}")
+            await update.message.reply_text(f"⚠️ حدث خطأ أثناء التسجيل: {e}")
         finally:
             conn.close()
 
@@ -723,7 +860,19 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif action == "upload_file" and role:
         main_type = state_data.get("main_type")
         sec_key = state_data.get("sec_key")
-        item_name = update.message.caption or text or "أداة/ملف استخباراتي"
+        
+        caption_text = update.message.caption or text or "أداة/ملف استخباراتي | 0"
+        
+        if "|" in caption_text:
+            parts = [p.strip() for p in caption_text.split("|", 1)]
+            item_name = parts[0]
+            try:
+                points_cost = int(parts[1])
+            except:
+                points_cost = 0
+        else:
+            item_name = caption_text
+            points_cost = 0
         
         file_id, file_type = None, None
         if update.message.document:
@@ -737,18 +886,19 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             file_type = "video"
             
         if not file_id:
-            await update.message.reply_text("⚠️ يرجى إرسال الملف مرفقاً باسم العنصر في خانة التعليق (Caption).")
+            await update.message.reply_text("⚠️ يرجى إرسال الملف مرفقاً بالصيغة الصحيحة في خانة التعليق (Caption).")
             return
             
         conn = sqlite3.connect("dark_cyber_academy.db")
         cursor = conn.cursor()
-        cursor.execute("INSERT INTO content (main_type, sec_key, item_name, file_id, file_type) VALUES (?, ?, ?, ?, ?)",
-                       (main_type, sec_key, item_name, file_id, file_type))
+        cursor.execute("INSERT INTO content (main_type, sec_key, item_name, file_id, file_type, points_cost) VALUES (?, ?, ?, ?, ?, ?)",
+                       (main_type, sec_key, item_name, file_id, file_type, points_cost))
         conn.commit()
         conn.close()
         
         del admin_state[user_id]
-        await update.message.reply_text(f"✅ **تم رفع وتشفير العنصر ({item_name}) بنجاح في الأرشيف!**")
+        cost_info = f"(مجاني)" if points_cost == 0 else f"(مقفل بمقابل {points_cost} نقطة)"
+        await update.message.reply_text(f"✅ **تم رفع وتشفير العنصر ({item_name}) بنجاح في الأرشيف!**\n🏷️ الحالة: {cost_info}")
 
 def main():
     app = ApplicationBuilder().token(BOT_TOKEN).build()
