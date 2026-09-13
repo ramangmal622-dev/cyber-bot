@@ -266,7 +266,8 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         conn = sqlite3.connect("dark_cyber_academy.db")
         cursor = conn.cursor()
-        cursor.execute("SELECT item_name FROM content WHERE main_type = ? AND sec_key = ?", (main_type, sec_key))
+        # جلب الـ ID الخاص بالعنصر واسمه لضمان التحميل السليم تماماً
+        cursor.execute("SELECT id, item_name FROM content WHERE main_type = ? AND sec_key = ?", (main_type, sec_key))
         items = cursor.fetchall()
         conn.close()
         
@@ -275,27 +276,36 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             keyboard.append([InlineKeyboardButton("⚠️ القطاع فارغ حالياً", callback_data="none")])
         else:
             for item in items:
-                keyboard.append([InlineKeyboardButton(f"📥 {item[0]}", callback_data=f"get_{main_type}_{sec_key}_{item[0]}")])
+                row_id, item_name = item
+                # نستخدم ID الرقمي لضمان عدم حدوث أي خطأ في أسماء الملفات أو المسافات
+                keyboard.append([InlineKeyboardButton(f"📥 {item_name}", callback_data=f"getfile_{row_id}")])
+        
         keyboard.append([InlineKeyboardButton("⬅️ رجوع للأقسام", callback_data=f"main_{main_type}")])
         await query.edit_message_text(text="اختر العنصر لتحميله بآمان تام:", reply_markup=InlineKeyboardMarkup(keyboard))
 
-    elif data.startswith("get_"):
-        parts = data.split("_", 3)
+    elif data.startswith("getfile_"):
+        file_row_id = data.replace("getfile_", "")
+        
         conn = sqlite3.connect("dark_cyber_academy.db")
         cursor = conn.cursor()
-        cursor.execute("SELECT file_id, file_type FROM content WHERE main_type = ? AND sec_key = ? AND item_name = ?", (parts[1], parts[2], parts[3]))
+        cursor.execute("SELECT file_id, file_type, item_name FROM content WHERE id = ?", (file_row_id,))
         row = cursor.fetchone()
         conn.close()
         
         if row:
-            f_id, f_type = row
-            await query.message.reply_text(f"🔄 جاري تحميل وتشفير الملف المطلوب ({parts[3]})...")
-            if f_type == "document":
-                await context.bot.send_document(chat_id=query.message.chat_id, document=f_id)
-            elif f_type == "photo":
-                await context.bot.send_photo(chat_id=query.message.chat_id, photo=f_id)
-            elif f_type == "video":
-                await context.bot.send_video(chat_id=query.message.chat_id, video=f_id)
+            f_id, f_type, item_name = row
+            await query.message.reply_text(f"🔄 جاري سحب وإرسال الملف المطلوب ({item_name})...")
+            try:
+                if f_type == "document":
+                    await context.bot.send_document(chat_id=query.message.chat_id, document=f_id)
+                elif f_type == "photo":
+                    await context.bot.send_photo(chat_id=query.message.chat_id, photo=f_id)
+                elif f_type == "video":
+                    await context.bot.send_video(chat_id=query.message.chat_id, video=f_id)
+            except Exception as e:
+                await query.message.reply_text(f"⚠️ تعذر إرسال الملف (قد يكون الـ File ID غير صالح أو منتهياً): {e}")
+        else:
+            await query.message.reply_text("❌ لم يتم العثور على الملف في قاعدة البيانات.")
 
     elif data == "admin_main":
         if not role:
@@ -305,12 +315,49 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             [InlineKeyboardButton("📢 البث الإذاعي الشامل لجميع الرعية", callback_data="admin_broadcast_prompt")],
             [InlineKeyboardButton("🧠 زرع تحدي واختبار سيبراني (Quiz)", callback_data="admin_add_quiz")],
             [InlineKeyboardButton("📤 رفع أداة أو ملف استخباراتي جديد", callback_data="upload_choose_main")],
+            [InlineKeyboardButton("🗑️ حذف ملف أو عنصر من الأرشيف", callback_data="admin_delete_menu")],
             [InlineKeyboardButton("🎓 إدارة الطلاب والتقييمات والدرجات", callback_data="manage_students_scores")],
             [InlineKeyboardButton("📥 فحص ومراجعة الواجبات المقدمة", callback_data="review_submissions")],
             [InlineKeyboardButton("👥 لوحة التحكم بالمشرفين والصلاحيات", callback_data="manage_admins_panel")],
             [InlineKeyboardButton("⬅️ رجوع للرئيسية", callback_data="back_home")]
         ]
         await query.edit_message_text(text=f"👑 **غرفة القيادة العليا (مستوى السيادة: {role}):**", reply_markup=InlineKeyboardMarkup(keyboard))
+
+    elif data == "admin_delete_menu":
+        if not role:
+            return
+        conn = sqlite3.connect("dark_cyber_academy.db")
+        cursor = conn.cursor()
+        cursor.execute("SELECT id, main_type, sec_key, item_name FROM content")
+        items = cursor.fetchall()
+        conn.close()
+        
+        if not items:
+            keyboard = [[InlineKeyboardButton("⬅️ رجوع لوحة القيادة", callback_data="admin_main")]]
+            await query.edit_message_text("📭 لا توجد أي ملفات أو عناصر مسجلة في الأرشيف لحذفها.", reply_markup=InlineKeyboardMarkup(keyboard))
+            return
+            
+        keyboard = []
+        for item in items:
+            row_id, m_type, s_key, name = item
+            keyboard.append([InlineKeyboardButton(f"🗑️ حذف: {name} ({m_type})", callback_data=f"del_item_{row_id}")])
+        
+        keyboard.append([InlineKeyboardButton("⬅️ رجوع لوحة القيادة", callback_data="admin_main")])
+        await query.edit_message_text("⚠️ **اختر العنصر الذي تريد حذفه نهائياً من الأرشيف:**", reply_markup=InlineKeyboardMarkup(keyboard))
+
+    elif data.startswith("del_item_"):
+        if not role:
+            return
+        row_id = data.replace("del_item_", "")
+        
+        conn = sqlite3.connect("dark_cyber_academy.db")
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM content WHERE id = ?", (row_id,))
+        conn.commit()
+        conn.close()
+        
+        keyboard = [[InlineKeyboardButton("⬅️ رجوع لوحة القيادة", callback_data="admin_main")]]
+        await query.edit_message_text("✅ **تم حذف العنصر بنجاح من قاعدة البيانات والأرشيف!**", reply_markup=InlineKeyboardMarkup(keyboard))
 
     elif data == "manage_students_scores":
         if not role:
@@ -676,7 +723,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif action == "upload_file" and role:
         main_type = state_data.get("main_type")
         sec_key = state_data.get("sec_key")
-        item_name = update.message.caption or "أداة/ملف استخباراتي"
+        item_name = update.message.caption or text or "أداة/ملف استخباراتي"
         
         file_id, file_type = None, None
         if update.message.document:
