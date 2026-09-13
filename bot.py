@@ -2,7 +2,9 @@ import os
 import sqlite3
 import logging
 import random
-import re  # مكتبة التعبيرات المنتظمة لاستخراج الآيدي
+import re
+import threading
+from http.server import HTTPServer, BaseHTTPRequestHandler
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     ApplicationBuilder,
@@ -12,6 +14,21 @@ from telegram.ext import (
     MessageHandler,
     filters,
 )
+
+# إعداد خادم ويب بسيط لمنصة Railway لكي تظل الحاوية مفتوحة ولا تتوقف
+class SimpleHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b"Cyber-Ops Empire Bot is active and running!")
+
+def run_web_server():
+    port = int(os.environ.get("PORT", 8080))
+    server = HTTPServer(("0.0.0.0", port), SimpleHandler)
+    server.serve_forever()
+
+# بدء تشغيل السيرفر الوهمي في خلفية منفصلة
+threading.Thread(target=run_web_server, daemon=True).start()
 
 logging.basicConfig(
     format="[DARK-LOG] %(asctime)s - %(levelname)s - %(message)s",
@@ -487,7 +504,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         cursor = conn.cursor()
         try:
             cursor.execute("INSERT INTO students (student_id, user_id, name, points) VALUES (?, ?, ?, ?)", 
-                           (student_id, user_id, name, 10)) # هدية تسجيل 10 نقاط
+                           (student_id, user_id, name, 10))
             conn.commit()
             del admin_state[user_id]
             await update.message.reply_text(
@@ -524,7 +541,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("❌ لم يتم العثور على أي طالب بهذا الآيدي في النظام.")
 
     elif action == "wait_student_task_submission":
-        # محاولة استخراج الآيدي واسم المهمة من التعليق
         caption = update.message.caption or text
         match = re.search(r'(\d{6})', caption)
         
