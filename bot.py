@@ -2,7 +2,7 @@ import os
 import sqlite3
 import logging
 import random
-import re  # تم إضافة مكتبة التعبيرات المنتظمة لاستخراج الآيدي
+import re  # مكتبة التعبيرات المنتظمة لاستخراج الآيدي
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     ApplicationBuilder,
@@ -272,7 +272,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         if row:
             f_id, f_type = row
-            await query.message.reply_text(f"🔄 جاري تحميل وتشفير الملف المطلوبة ({parts[3]})...")
+            await query.message.reply_text(f"🔄 جاري تحميل وتشفير الملف المطلوب ({parts[3]})...")
             if f_type == "document":
                 await context.bot.send_document(chat_id=query.message.chat_id, document=f_id)
             elif f_type == "photo":
@@ -312,8 +312,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         admin_state[user_id] = {"action": "wait_new_student_data"}
         await query.message.reply_text(
             "➕ أرسل الآن (اسم المتدرب + تليجرام آيدي + الآيدي المراد تثبيته):\n"
-            "مثال: `كيان رعد جمال  123456789  939414`\n\n"
-            "*(ملاحظة: يمكنك كتابة الاسم والآيدي المرغوب مباشرة وسيتولى البوت التقاطه)*"
+            "مثال: `كيان رعد جمال  123456789  939414`"
         )
 
     elif data == "admin_add_points":
@@ -438,3 +437,265 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parts = data.split("_", 2)
         admin_state[user_id] = {"action": "upload_file", "main_type": parts[1], "sec_key": parts[2]}
         await query.message.reply_text("📥 أرسل الآن الملف أو الأداة (مع كتابة اسم العنصر في الـ Caption):")
+
+    elif data == "back_home":
+        if user_id in admin_state:
+            del admin_state[user_id]
+        
+        conn = sqlite3.connect("dark_cyber_academy.db")
+        cursor = conn.cursor()
+        cursor.execute("SELECT student_id, name FROM students WHERE user_id = ?", (user_id,))
+        student_row = cursor.fetchone()
+        conn.close()
+
+        keyboard = []
+        for sec_key, sec_name in main_sections.items():
+            keyboard.append([InlineKeyboardButton(sec_name, callback_data=f"main_{sec_key}")])
+        
+        keyboard.append([InlineKeyboardButton("🔍 الاستعلام الشامل عن الملف الأكاديمي بالآيدي", callback_data="student_lookup_prompt")])
+        keyboard.append([InlineKeyboardButton("📤 رفع وإرسال حل مهمة / واجب عملي", callback_data="submit_task_prompt")])
+        keyboard.append([InlineKeyboardButton("🧠 تحدي واختبار مهارات السيبراني الفوري", callback_data="start_quick_quiz")])
+
+        if role:
+            keyboard.append([InlineKeyboardButton("👑 غرفة العمليات المركزية وسيادة الإدارة", callback_data="admin_main")])
+            
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        welcome_msg = f"🥷 **أهلاً بك مجدداً في المحطة المركزية**"
+        if student_row:
+            welcome_msg = f"🥷 **أهلاً بك أيها المتدرب ({student_row[1]})**\n🆔 الآيدي الخاص بك: `{student_row[0]}`"
+
+        await query.edit_message_text(text=welcome_msg, reply_markup=reply_markup, parse_mode="Markdown")
+
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    if user_id not in admin_state:
+        return
+        
+    state_data = admin_state[user_id]
+    action = state_data.get("action")
+    text = update.message.text or ""
+    role = get_user_role(user_id)
+
+    if action == "wait_self_registration_name":
+        name = text.strip()
+        if len(name) < 3:
+            await update.message.reply_text("⚠️ الاسم قصير جداً. يرجى كتابة الاسم الثلاثي الصحيح:")
+            return
+            
+        student_id = generate_unique_student_id()
+        conn = sqlite3.connect("dark_cyber_academy.db")
+        cursor = conn.cursor()
+        try:
+            cursor.execute("INSERT INTO students (student_id, user_id, name, points) VALUES (?, ?, ?, ?)", 
+                           (student_id, user_id, name, 10)) # هدية تسجيل 10 نقاط
+            conn.commit()
+            del admin_state[user_id]
+            await update.message.reply_text(
+                f"✅ **تم تسجيلك بنجاح في سجلات الأكاديمية!**\n\n"
+                f"👤 الاسم: `{name}`\n"
+                f"🆔 الآيدي الخاص بك: `{student_id}`\n"
+                f"⭐ رصيد البداية: `10` نقاط\n\n"
+                f"احتفظ بالآيدي الخاص بك جيداً للاستعلام ولتسليم المهام."
+            )
+        except Exception as e:
+            await update.message.reply_text(f"⚠️ حدث خطأ أثناء التسجيل (ربما حسابك مسجل مسبقاً): {e}")
+        finally:
+            conn.close()
+
+    elif action == "wait_student_query_id":
+        sid = text.strip()
+        conn = sqlite3.connect("dark_cyber_academy.db")
+        cursor = conn.cursor()
+        cursor.execute("SELECT name, points, status, join_date FROM students WHERE student_id = ?", (sid,))
+        row = cursor.fetchone()
+        conn.close()
+        
+        del admin_state[user_id]
+        if row:
+            await update.message.reply_text(
+                f"🔍 **الملف الأكاديمي للطالب:**\n\n"
+                f"🆔 الآيدي: `{sid}`\n"
+                f"👤 الاسم: **{row[0]}**\n"
+                f"⭐ النقاط والأوسمة: `{row[1]}`\n"
+                f"⚡ الحالة: `{row[2]}`\n"
+                f"📅 تاريخ الانضمام: `{row[3]}`"
+            )
+        else:
+            await update.message.reply_text("❌ لم يتم العثور على أي طالب بهذا الآيدي في النظام.")
+
+    elif action == "wait_student_task_submission":
+        # محاولة استخراج الآيدي واسم المهمة من التعليق
+        caption = update.message.caption or text
+        match = re.search(r'(\d{6})', caption)
+        
+        if not match and not update.message.document and not update.message.photo and not update.message.video:
+            await update.message.reply_text("⚠️ يرجى إرسال الملف مع كتابة آيدي الطالب المكون من 6 أرقام في الـ Caption.")
+            return
+            
+        student_id = match.group(1) if match else "غير محدد"
+        conn = sqlite3.connect("dark_cyber_academy.db")
+        cursor = conn.cursor()
+        cursor.execute("SELECT name FROM students WHERE student_id = ?", (student_id,))
+        st_row = cursor.fetchone()
+        conn.close()
+        
+        student_name = st_row[0] if st_row else "طالب غير مسجل بالآيدي"
+        
+        file_id = None
+        if update.message.document:
+            file_id = update.message.document.file_id
+        elif update.message.photo:
+            file_id = update.message.photo[-1].file_id
+        elif update.message.video:
+            file_id = update.message.video.file_id
+            
+        if not file_id:
+            await update.message.reply_text("⚠️ يرجى التأكد من إرفاق ملف أو مستند صحيح.")
+            return
+            
+        conn = sqlite3.connect("dark_cyber_academy.db")
+        cursor = conn.cursor()
+        cursor.execute("INSERT INTO submissions (student_id, student_name, task_info, file_id) VALUES (?, ?, ?, ?)",
+                       (student_id, student_name, caption, file_id))
+        conn.commit()
+        conn.close()
+        
+        del admin_state[user_id]
+        await update.message.reply_text("✅ **تم استلام وتشفير مهمتك العملية بنجاح!**\nتم إرسالها للجنة الفحص والمراجعة السيبرانية.")
+
+    elif action == "wait_new_student_data" and role:
+        parts = text.split()
+        if len(parts) < 3:
+            await update.message.reply_text("⚠️ الصيغة غير صحيحة. أرسل: الاسم + تليجرام آيدي + آيدي الطالب المراد تثبيته.")
+            return
+        st_name = " ".join(parts[:-2])
+        t_id = int(parts[-2])
+        s_id = parts[-1]
+        
+        conn = sqlite3.connect("dark_cyber_academy.db")
+        cursor = conn.cursor()
+        try:
+            cursor.execute("INSERT INTO students (student_id, user_id, name, points) VALUES (?, ?, ?, ?)", (s_id, t_id, st_name, 0))
+            conn.commit()
+            del admin_state[user_id]
+            await update.message.reply_text(f"✅ تمت إضافة الطالب {st_name} بنجاح بالآيدي: `{s_id}`")
+        except Exception as e:
+            await update.message.reply_text(f"⚠️ خطأ أثناء التسجيل: {e}")
+        finally:
+            conn.close()
+
+    elif action == "wait_admin_points_input" and role:
+        parts = text.split()
+        if len(parts) != 2:
+            await update.message.reply_text("⚠️ صيغة خاطئة. أرسل هكذا: `482910  50`")
+            return
+        s_id, pts = parts[0], int(parts[1])
+        conn = sqlite3.connect("dark_cyber_academy.db")
+        cursor = conn.cursor()
+        cursor.execute("UPDATE students SET points = points + ? WHERE student_id = ?", (pts, s_id))
+        conn.commit()
+        conn.close()
+        del admin_state[user_id]
+        await update.message.reply_text(f"✅ تم تحديث وإضافة النقاط بنجاح للآيدي: `{s_id}`")
+
+    elif action == "wait_quiz_data" and role:
+        parts = [p.strip() for p in text.split("|")]
+        if len(parts) != 6:
+            await update.message.reply_text("⚠️ الصيغة غير مطابقة للشروط. تأكد من استخدام الفاصلة | بين العناصر الستة.")
+            return
+        q, o1, o2, o3, corr, pts = parts[0], parts[1], parts[2], parts[3], int(parts[4]), int(parts[5])
+        conn = sqlite3.connect("dark_cyber_academy.db")
+        cursor = conn.cursor()
+        cursor.execute("INSERT INTO quizzes (question, opt1, opt2, opt3, correct_opt, reward_points) VALUES (?, ?, ?, ?, ?, ?)",
+                       (q, o1, o2, o3, corr, pts))
+        conn.commit()
+        conn.close()
+        del admin_state[user_id]
+        await update.message.reply_text("🧠 **تم زرع الاختبار السيبراني بنجاح في بنك الأسئلة!**")
+
+    elif action == "wait_broadcast_message" and role in ["dark_lord", "manager"]:
+        conn = sqlite3.connect("dark_cyber_academy.db")
+        cursor = conn.cursor()
+        cursor.execute("SELECT user_id FROM students WHERE user_id IS NOT NULL")
+        students_list = cursor.fetchall()
+        conn.close()
+        
+        del admin_state[user_id]
+        count = 0
+        await update.message.reply_text("📢 جاري إرسال البث الإذاعي لكافة الرعية...")
+        for st in students_list:
+            try:
+                await context.bot.send_message(chat_id=st[0], text=f"📢 **تنبيه إذاعي قيادي:**\n\n{text}")
+                count += 1
+            except:
+                pass
+        await update.message.reply_text(f"✅ تم بنجاح إرسال البث إلى {count} مستخدم.")
+
+    elif action == "wait_new_admin_id" and role == "dark_lord":
+        try:
+            new_admin_id = int(text.strip())
+            conn = sqlite3.connect("dark_cyber_academy.db")
+            cursor = conn.cursor()
+            cursor.execute("INSERT OR REPLACE INTO admins (user_id, role, assigned_by) VALUES (?, ?, ?)", (new_admin_id, "manager", user_id))
+            conn.commit()
+            conn.close()
+            del admin_state[user_id]
+            await update.message.reply_text(f"✅ تم تعيين المشرف الجديد برتبة `manager` بنجاح للآيدي: `{new_admin_id}`")
+        except Exception as e:
+            await update.message.reply_text(f"⚠️ خطأ: {e}")
+
+    elif action == "wait_remove_admin_id" and role == "dark_lord":
+        try:
+            rem_id = int(text.strip())
+            conn = sqlite3.connect("dark_cyber_academy.db")
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM admins WHERE user_id = ?", (rem_id,))
+            conn.commit()
+            conn.close()
+            del admin_state[user_id]
+            await update.message.reply_text(f"🗑️ تم عزل وسحب صلاحيات المشرف صاحب الآيدي: `{rem_id}`")
+        except Exception as e:
+            await update.message.reply_text(f"⚠️ خطأ: {e}")
+
+    elif action == "upload_file" and role:
+        main_type = state_data.get("main_type")
+        sec_key = state_data.get("sec_key")
+        item_name = update.message.caption or "أداة/ملف استخباراتي"
+        
+        file_id, file_type = None, None
+        if update.message.document:
+            file_id = update.message.document.file_id
+            file_type = "document"
+        elif update.message.photo:
+            file_id = update.message.photo[-1].file_id
+            file_type = "photo"
+        elif update.message.video:
+            file_id = update.message.video.file_id
+            file_type = "video"
+            
+        if not file_id:
+            await update.message.reply_text("⚠️ يرجى إرسال الملف مرفقاً باسم العنصر في خانة التعليق (Caption).")
+            return
+            
+        conn = sqlite3.connect("dark_cyber_academy.db")
+        cursor = conn.cursor()
+        cursor.execute("INSERT INTO content (main_type, sec_key, item_name, file_id, file_type) VALUES (?, ?, ?, ?, ?)",
+                       (main_type, sec_key, item_name, file_id, file_type))
+        conn.commit()
+        conn.close()
+        
+        del admin_state[user_id]
+        await update.message.reply_text(f"✅ **تم رفع وتشفير العنصر ({item_name}) بنجاح في الأرشيف!**")
+
+def main():
+    app = ApplicationBuilder().token(BOT_TOKEN).build()
+    
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CallbackQueryHandler(button_handler))
+    app.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, handle_message))
+    
+    print("🤖 Bot is running...")
+    app.run_polling()
+
+if __name__ == "__main__":
+    main()
