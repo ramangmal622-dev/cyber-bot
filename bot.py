@@ -20,7 +20,7 @@ class SimpleHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
         self.end_headers()
-        self.wfile.write(b"Cyber-Ops Empire Bot is active and running!")
+        self.wfile.write(b"Cyber-Ops Empire Bot v4.5 is active and running!")
 
 def run_web_server():
     port = int(os.environ.get("PORT", 8080))
@@ -44,6 +44,7 @@ def init_db():
     cursor = conn.cursor()
     cursor.execute("PRAGMA journal_mode=WAL;")
     
+    # جدول المشرفين والصلاحيات الموسعة
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS admins (
             user_id INTEGER PRIMARY KEY,
@@ -53,6 +54,7 @@ def init_db():
         )
     """)
     
+    # جدول الطلاب (مع دعم حالة الحظر BANNED)
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS students (
             student_id TEXT PRIMARY KEY,
@@ -61,6 +63,16 @@ def init_db():
             points INTEGER DEFAULT 0,
             status TEXT DEFAULT 'ACTIVE',
             join_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    
+    # جدول سجلات التدقيق (Audit Logs) لتتبع نشاط المشرفين
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS audit_logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            admin_id INTEGER,
+            action_desc TEXT,
+            timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """)
     
@@ -115,6 +127,13 @@ def init_db():
 
 init_db()
 
+def log_admin_action(admin_id, desc):
+    conn = sqlite3.connect("dark_cyber_academy.db")
+    cursor = conn.cursor()
+    cursor.execute("INSERT INTO audit_logs (admin_id, action_desc) VALUES (?, ?)", (admin_id, desc))
+    conn.commit()
+    conn.close()
+
 def get_user_role(user_id):
     if user_id == OWNER_ID:
         return "dark_lord"
@@ -124,6 +143,14 @@ def get_user_role(user_id):
     row = cursor.fetchone()
     conn.close()
     return row[0] if row else None
+
+def is_student_banned(user_id):
+    conn = sqlite3.connect("dark_cyber_academy.db")
+    cursor = conn.cursor()
+    cursor.execute("SELECT status FROM students WHERE user_id = ?", (user_id,))
+    row = cursor.fetchone()
+    conn.close()
+    return row and row[0] == "BANNED"
 
 def generate_unique_student_id():
     conn = sqlite3.connect("dark_cyber_academy.db")
@@ -165,6 +192,11 @@ def get_all_sub_sections(main_type):
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
+    
+    if is_student_banned(user_id):
+        await update.message.reply_text("⛔ **حسابك محظور من استخدام النظام السيبراني.**")
+        return
+
     if user_id in admin_state:
         del admin_state[user_id]
         
@@ -179,7 +211,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not student_row and not role:
         admin_state[user_id] = {"action": "wait_self_registration_name"}
         await update.message.reply_text(
-            "🥷 **مرحباً بك في أكاديمية الأمن السيبراني (Cyber-Ops Empire v4.4)**\n\n"
+            "🥷 **مرحباً بك في أكاديمية الأمن السيبراني (Cyber-Ops Empire v4.5)**\n\n"
             "أنت تسجل لأول مرة في النظام. يرجى كتابة **اسمك الثلاثي** لحفظه في قاعدة البيانات وتوليد الآيدي الخاص بك:"
         )
         return
@@ -207,6 +239,11 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     user_id = query.from_user.id
+    
+    if is_student_banned(user_id):
+        await query.message.reply_text("⛔ حسابك محظور.")
+        return
+
     data = query.data
     role = get_user_role(user_id)
 
@@ -363,9 +400,29 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             [InlineKeyboardButton("🎓 إدارة الطلاب والتقييمات والدرجات", callback_data="manage_students_scores")],
             [InlineKeyboardButton("📥 فحص ومراجعة الواجبات المقدمة", callback_data="review_submissions")],
             [InlineKeyboardButton("👥 لوحة التحكم بالمشرفين والصلاحيات", callback_data="manage_admins_panel")],
+            [InlineKeyboardButton("📜 سجل تدقيق نشاطات المشرفين (Logs)", callback_data="admin_view_logs")],
             [InlineKeyboardButton("⬅️ رجوع للرئيسية", callback_data="back_home")]
         ]
         await query.edit_message_text(text=f"👑 **غرفة القيادة العليا (مستوى السيادة: {role}):**", reply_markup=InlineKeyboardMarkup(keyboard))
+
+    elif data == "admin_view_logs":
+        if role != "dark_lord":
+            await query.answer("مرفوض! هذه الصلاحية للمالك حصرياً.", show_alert=True)
+            return
+        conn = sqlite3.connect("dark_cyber_academy.db")
+        cursor = conn.cursor()
+        cursor.execute("SELECT admin_id, action_desc, timestamp FROM audit_logs ORDER BY id DESC LIMIT 15")
+        rows = cursor.fetchall()
+        conn.close()
+        
+        text = "📜 **سجل تدقيق النشاطات (آخر 15 عملية):**\n\n"
+        for r in rows:
+            text += f"👤 المشرف: `{r[0]}`\n⚡ الحدث: {r[1]}\n⏱️ `{r[2]}`\n-----------------\n"
+        if not rows:
+            text = "📜 لا توجد سجلات مسجلة بعد."
+            
+        keyboard = [[InlineKeyboardButton("⬅️ رجوع لوحة القيادة", callback_data="admin_main")]]
+        await query.edit_message_text(text=text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
 
     elif data == "admin_add_sub_section":
         if not role:
@@ -440,6 +497,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         conn.commit()
         conn.close()
         
+        log_admin_action(user_id, f"حذف العنصر رقم {row_id} من الأرشيف")
         keyboard = [[InlineKeyboardButton("⬅️ رجوع لوحة القيادة", callback_data="admin_main")]]
         await query.edit_message_text("✅ **تم حذف العنصر بنجاح من قاعدة البيانات والأرشيف!**", reply_markup=InlineKeyboardMarkup(keyboard))
 
@@ -449,6 +507,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         keyboard = [
             [InlineKeyboardButton("➕ تسجيل متدرب جديد وتوليد آيدي", callback_data="admin_add_student")],
             [InlineKeyboardButton("⭐ تعديل نقاط ودرجات متدرب", callback_data="admin_add_points")],
+            [InlineKeyboardButton("⛔ حظر / إلغاء حظر متدرب", callback_data="admin_ban_student_prompt")],
             [InlineKeyboardButton("📋 استعراض قاعدة بيانات الطلاب كاملة", callback_data="admin_list_students")],
             [InlineKeyboardButton("⬅️ رجوع لوحة القيادة", callback_data="admin_main")]
         ]
@@ -468,6 +527,12 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         admin_state[user_id] = {"action": "wait_admin_points_input"}
         await query.message.reply_text("⭐ أرسل الآيدي (6 أرقام) متبوعاً بقيمة النقاط المضافة:\nمثال: `482910  50`")
+
+    elif data == "admin_ban_student_prompt":
+        if not role:
+            return
+        admin_state[user_id] = {"action": "wait_ban_student_id"}
+        await query.message.reply_text("⛔ أرسل آيدي الطالب (6 أرقام) المراد تغيير حالة حظره:")
 
     elif data == "admin_list_students":
         if not role:
@@ -622,6 +687,9 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
+    if is_student_banned(user_id):
+        return
+
     if user_id not in admin_state:
         return
         
@@ -644,6 +712,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         conn.commit()
         conn.close()
         
+        log_admin_action(user_id, f"إضافة قسم فرعي جديد: {sec_name}")
         del admin_state[user_id]
         await update.message.reply_text(f"✅ **تم إنشاء القسم الفرعي الجديد ({sec_name}) بنجاح!**")
 
@@ -665,6 +734,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         conn.commit()
         conn.close()
         
+        log_admin_action(user_id, f"إعادة تسمية القسم {sk} إلى {new_name}")
         del admin_state[user_id]
         await update.message.reply_text(f"✅ **تم تحديث وإعادة تسمية القسم بنجاح إلى:**\n`{new_name}`", parse_mode="Markdown")
 
@@ -752,7 +822,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         conn.close()
         
         del admin_state[user_id]
-        await update.message.reply_text("✅ **تم استلاستشفير وتشفير مهمتك العملية بنجاح!**\nتم إرسالها للجنة الفحص والمراجعة السيبرانية.")
+        await update.message.reply_text("✅ **تم استلام وتشفير مهمتك العملية بنجاح!**\nتم إرسالها للجنة الفحص والمراجعة السيبرانية.")
 
     elif action == "wait_new_student_data" and role:
         parts = text.split()
@@ -768,6 +838,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
             cursor.execute("INSERT INTO students (student_id, user_id, name, points) VALUES (?, ?, ?, ?)", (s_id, t_id, st_name, 0))
             conn.commit()
+            log_admin_action(user_id, f"تسجيل طالب جديد: {st_name} (آيدي: {s_id})")
             del admin_state[user_id]
             await update.message.reply_text(f"✅ تمت إضافة الطالب {st_name} بنجاح بالآيدي: `{s_id}`")
         except Exception as e:
@@ -786,8 +857,27 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         cursor.execute("UPDATE students SET points = points + ? WHERE student_id = ?", (pts, s_id))
         conn.commit()
         conn.close()
+        log_admin_action(user_id, f"تعديل نقاط الطالب {s_id} بقيمة {pts}")
         del admin_state[user_id]
         await update.message.reply_text(f"✅ تم تحديث وإضافة النقاط بنجاح للآيدي: `{s_id}`")
+
+    elif action == "wait_ban_student_id" and role:
+        s_id = text.strip()
+        conn = sqlite3.connect("dark_cyber_academy.db")
+        cursor = conn.cursor()
+        cursor.execute("SELECT status FROM students WHERE student_id = ?", (s_id,))
+        row = cursor.fetchone()
+        if row:
+            current_status = row[0]
+            new_status = "BANNED" if current_status == "ACTIVE" else "ACTIVE"
+            cursor.execute("UPDATE students SET status = ? WHERE student_id = ?", (new_status, s_id))
+            conn.commit()
+            log_admin_action(user_id, f"تغيير حالة الطالب {s_id} إلى {new_status}")
+            await update.message.reply_text(f"✅ تم تغيير حالة الطالب `{s_id}` بنجاح إلى: `{new_status}`")
+        else:
+            await update.message.reply_text("❌ لم يتم العثور على الطالب بهذا الآيدي.")
+        conn.close()
+        del admin_state[user_id]
 
     elif action == "wait_quiz_data" and role:
         parts = [p.strip() for p in text.split("|")]
@@ -801,6 +891,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                        (q, o1, o2, o3, corr, pts))
         conn.commit()
         conn.close()
+        log_admin_action(user_id, "إضافة اختبار سيبراني جديد")
         del admin_state[user_id]
         await update.message.reply_text("🧠 **تم زرع الاختبار السيبراني بنجاح في بنك الأسئلة!**")
 
@@ -811,6 +902,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         students_list = cursor.fetchall()
         conn.close()
         
+        log_admin_action(user_id, "إرسال بث إذاعي عام")
         del admin_state[user_id]
         count = 0
         await update.message.reply_text("📢 جاري إرسال البث الإذاعي لكافة الرعية...")
@@ -830,6 +922,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             cursor.execute("INSERT OR REPLACE INTO admins (user_id, role, assigned_by) VALUES (?, ?, ?)", (new_admin_id, "manager", user_id))
             conn.commit()
             conn.close()
+            log_admin_action(user_id, f"تعيين مشرف جديد: {new_admin_id}")
             del admin_state[user_id]
             await update.message.reply_text(f"✅ تم تعيين المشرف الجديد برتبة `manager` بنجاح للآيدي: `{new_admin_id}`")
         except Exception as e:
@@ -843,6 +936,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             cursor.execute("DELETE FROM admins WHERE user_id = ?", (rem_id,))
             conn.commit()
             conn.close()
+            log_admin_action(user_id, f"عزل مشرف: {rem_id}")
             del admin_state[user_id]
             await update.message.reply_text(f"🗑️ تم عزل وسحب صلاحيات المشرف صاحب الآيدي: `{rem_id}`")
         except Exception as e:
@@ -887,6 +981,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         conn.commit()
         conn.close()
         
+        log_admin_action(user_id, f"رفع ملف جديد: {item_name}")
         del admin_state[user_id]
         cost_info = f"(مجاني)" if points_cost == 0 else f"(مقفل بمقابل {points_cost} نقطة)"
         await update.message.reply_text(f"✅ **تم رفع وتشفير العنصر ({item_name}) بنجاح في الأرشيف!**\n🏷️ الحالة: {cost_info}")
@@ -898,7 +993,7 @@ def main():
     app.add_handler(CallbackQueryHandler(button_handler))
     app.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, handle_message))
     
-    print("🤖 Bot is running...")
+    print("🤖 Bot v4.5 is running...")
     app.run_polling()
 
 if __name__ == "__main__":
