@@ -737,7 +737,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not role:
             return
         v_id = data.replace("vuln_accept_", "")
-        conn = sqlite3.connect("dark_cyber_academy.db") مكثف
+        conn = sqlite3.connect("dark_cyber_academy.db")
         cursor = conn.cursor()
         cursor.execute("SELECT student_id FROM vulnerability_reports WHERE id = ?", (v_id,))
         r = cursor.fetchone()
@@ -1072,7 +1072,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif action == "wait_scan_link":
         link = text.strip()
         del admin_state[user_id]
-        # فحص تجريبي وهمي احترافي للرابط
         safe_status = "🟢 نظيف وآمن تماماً (Clean)" if "http" in link else "🔴 مشبوه أو غير صالح!"
         await update.message.reply_text(
             f"🔍 **نتيجة التحليل الأمني للرابط:**\n`{link}`\n\n"
