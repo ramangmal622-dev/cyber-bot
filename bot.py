@@ -436,4 +436,5 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not role:
             return
         parts = data.split("_", 2)
-        admin_state[user_id] = {"action": "upload_file",
+        admin_state[user_id] = {"action": "upload_file", "main_type": parts[1], "sec_key": parts[2]}
+        await query.message.reply_text("📥 أرسل الآن الملف أو الأداة (مع كتابة اسم العنصر في الـ Caption):")
