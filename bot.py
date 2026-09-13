@@ -64,7 +64,6 @@ def init_db():
         )
     """)
     
-    # جدول الأقسام الفرعية الديناميكية الجديدة
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS custom_sub_sections (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -74,7 +73,6 @@ def init_db():
         )
     """)
     
-    # جدول المحتوى ليشمل تكلفة النقاط (points_cost)
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS content (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -147,7 +145,6 @@ main_sections = {
     "malware": "🛡️ هندسة التحليل العكسي للماوير"
 }
 
-# الأقسام الافتراضية الثابتة (يمكن تعديل أسمائها عبر قاعدة البيانات الموحدة للأقسام)
 base_sub_sections = {
     "pdf": {"net_sec": "📁 تأمين الشبكات والبروتوكولات المعقدة", "web_sec": "📁 ثغرات الـ Web العميقة والأمن العالي", "crypto": "📁 علم التشفير المتقدم والـ ECC"},
     "tools": {"recon": "🛠️ أدوات الاستطلاع والـ OSINT السرية", "exploit": "🛠️ إطارات وكور ثغرات الـ Zero-Day", "defend": "🛠️ أنظمة الدفاع والتصدّي الذكي"},
@@ -384,7 +381,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         admin_state[user_id] = {"action": "wait_new_sub_section", "main_type": m_type}
         await query.message.reply_text("➕ أرسل الآن اسم الفرع الجديد ومعرفه (Key) بالصيغة التالية:\n`المفتاح | اسم الفرع`\nمثال: `ai_tools | أدوات الذكاء الاصطناعي السيبراني`")
 
-    # === ميزة إعادة تسمية الأقسام الجديدة ===
     elif data == "admin_rename_sub_section":
         if not role:
             return
@@ -410,7 +406,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         m_type, sk = parts[1], parts[2]
         admin_state[user_id] = {"action": "wait_rename_sub_section", "main_type": m_type, "sec_key": sk}
         await query.message.reply_text("✏️ أرسل الآن **الاسم الجديد** لهذا الفرع:\nمثال: `📁 تأمين السيرفرات والسحابيات المتقدمة`")
-    # ========================================
 
     elif data == "admin_delete_menu":
         if not role:
@@ -573,7 +568,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not role:
             return
         keyboard = [[InlineKeyboardButton(f"رفع في: {n}", callback_data=f"upmain_{k}")] for k, n in main_sections.items()]
-        keyboard.append([InlineKeyboardButton("⬅️ رجوع", callback_data="admin_main")]]
+        keyboard.append([InlineKeyboardButton("⬅️ رجوع", callback_data="admin_main")])
         await query.edit_message_text(text="اختر قطاع الرفع:", reply_markup=InlineKeyboardMarkup(keyboard))
 
     elif data.startswith("upmain_"):
@@ -582,7 +577,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         m_type = data.replace("upmain_", "")
         subs = get_all_sub_sections(m_type)
         keyboard = [[InlineKeyboardButton(n, callback_data=f"uptarget_{m_type}_{sk}")] for sk, n in subs.items()]
-        keyboard.append([InlineKeyboardButton("⬅️ رجوع", callback_data="upload_choose_main")]]
+        keyboard.append([InlineKeyboardButton("⬅️ رجوع", callback_data="upload_choose_main")])
         await query.edit_message_text(text="اختر الفرع المحدد:", reply_markup=InlineKeyboardMarkup(keyboard))
 
     elif data.startswith("uptarget_"):
@@ -652,7 +647,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         del admin_state[user_id]
         await update.message.reply_text(f"✅ **تم إنشاء القسم الفرعي الجديد ({sec_name}) بنجاح!**")
 
-    # === معالجة حفظ إعادة التسمية الجديدة ===
     elif action == "wait_rename_sub_section" and role:
         new_name = text.strip()
         m_type = state_data.get("main_type")
@@ -660,14 +654,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         conn = sqlite3.connect("dark_cyber_academy.db")
         cursor = conn.cursor()
-        # فحص هل القسم الفرعي موجود في الجدول المخصص أم افتراضي
         cursor.execute("SELECT id FROM custom_sub_sections WHERE main_type = ? AND sec_key = ?", (m_type, sk))
         row = cursor.fetchone()
         
         if row:
             cursor.execute("UPDATE custom_sub_sections SET sec_name = ? WHERE main_type = ? AND sec_key = ?", (new_name, m_type, sk))
         else:
-            # إذا كان القسم أساسي افتراضي وغير موجود في الجدول المخصص، نقوم بإضافته لتعديل اسمه واعتማده
             cursor.execute("INSERT INTO custom_sub_sections (main_type, sec_key, sec_name) VALUES (?, ?, ?)", (m_type, sk, new_name))
             
         conn.commit()
@@ -675,7 +667,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         del admin_state[user_id]
         await update.message.reply_text(f"✅ **تم تحديث وإعادة تسمية القسم بنجاح إلى:**\n`{new_name}`", parse_mode="Markdown")
-    # ========================================
 
     elif action == "wait_self_registration_name":
         name = text.strip()
@@ -761,7 +752,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         conn.close()
         
         del admin_state[user_id]
-        await update.message.reply_text("✅ **تم استلام وتشفير مهمتك العملية بنجاح!**\nتم إرسالها للجنة الفحص والمراجعة السيبرانية.")
+        await update.message.reply_text("✅ **تم استلاستشفير وتشفير مهمتك العملية بنجاح!**\nتم إرسالها للجنة الفحص والمراجعة السيبرانية.")
 
     elif action == "wait_new_student_data" and role:
         parts = text.split()
