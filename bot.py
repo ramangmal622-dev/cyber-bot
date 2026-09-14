@@ -14,7 +14,7 @@ from telebot import types
 TOKEN = "8969629386:AAFbTJaSmJ-9ADKjSLazu4LXfvxFyExd35o"
 bot = telebot.TeleBot(TOKEN)
 
-# الآيدي الخاص بك كأدمن أساسي للبوت
+# الآيدي الخاص بك كأدمن أساسي (مالك البوت)
 OWNER_ID = 8083038345  
 
 # ==================== قاعدة البيانات والجدولة (Database Setup) ====================
@@ -30,6 +30,15 @@ def init_db():
             points INTEGER DEFAULT 0,
             is_admin INTEGER DEFAULT 0,
             is_banned INTEGER DEFAULT 0
+        )
+    ''')
+    
+    # جدول صلاحيات الأدمن الفرعي لكل تخصص ومستوى (مثال: cyber_1, it_2, arch_3)
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS admin_permissions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER,
+            section_key TEXT
         )
     ''')
     
@@ -69,6 +78,9 @@ init_db()
 def get_db():
     return sqlite3.connect('bot_database.db', check_same_thread=False)
 
+def is_owner(user_id):
+    return user_id == OWNER_ID
+
 def is_admin(user_id):
     if user_id == OWNER_ID:
         return True
@@ -78,6 +90,16 @@ def is_admin(user_id):
     res = cursor.fetchone()
     conn.close()
     return res and res[0] == 1
+
+def has_section_permission(user_id, section_key):
+    if user_id == OWNER_ID:
+        return True
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute("SELECT id FROM admin_permissions WHERE user_id = ? AND section_key = ?", (user_id, section_key))
+    res = cursor.fetchone()
+    conn.close()
+    return res is not None
 
 def log_action(admin_id, action):
     conn = get_db()
@@ -141,7 +163,7 @@ def send_welcome(message):
     bot.send_message(message.chat.id, f"مرحباً بك يا {fullname} في البوت الأكاديمي الشامل 🎓\nاختر من الأزرار بالأسفل للبدء:", reply_markup=markup)
 
 
-# ==================== الأقسام الأكاديمية للطلاب (المستويات والتخصصات) ====================
+# ==================== الأقسام الأكاديمية للطلاب ====================
 
 @bot.message_handler(func=lambda msg: msg.text == "📂 تصفح الأقسام والملازم")
 def show_student_faculties(message):
@@ -173,20 +195,16 @@ def show_levels_for_faculty(call):
         types.InlineKeyboardButton("4️⃣ المستوى الرابع", callback_data=f"lvl_{prefix}_4"),
         types.InlineKeyboardButton("🔙 العودة للتخصصات", callback_data="back_to_faculties")
     )
-    bot.edit_message_text(f"📚 **{fac_name}**\nاختر المستوى الدراسي المطلوب لعرض محتوياته وأزّراره الخاصة:", call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode="Markdown")
+    bot.edit_message_text(f"📚 **{fac_name}**\nاختر المستوى الدراسي المطلوب:", call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode="Markdown")
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("lvl_"))
 def show_level_content_and_controls(call):
     data_parts = call.data.split("_")
-    prefix = data_parts[1] # cyber, it or arch
-    level_num = data_parts[2] # 1, 2, 3, 4
+    prefix = data_parts[1] 
+    level_num = data_parts[2] 
     
-    if prefix == "cyber":
-        fac_title = "الأمن السيبراني"
-    elif prefix == "it":
-        fac_title = "تقنية المعلومات"
-    else:
-        fac_title = "الهندسة المعمارية"
+    fac_titles = {"cyber": "الأمن السيبراني", "it": "تقنية المعلومات", "arch": "الهندسة المعمارية"}
+    fac_title = fac_titles.get(prefix, "التخصص")
     
     markup = types.InlineKeyboardMarkup(row_width=1)
     markup.add(
@@ -195,7 +213,7 @@ def show_level_content_and_controls(call):
         types.InlineKeyboardButton("💬 قروب النقاش الخاص بالمستوى", callback_data=f"group_{prefix}_{level_num}"),
         types.InlineKeyboardButton("🔙 العودة للمستويات", callback_data=f"fac_{prefix}")
     )
-    bot.edit_message_text(f"🎓 **تخصص {fac_title} - المستوى {level_num}**\nاختر الإجراء أو المحتوى المطلوب:", call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode="Markdown")
+    bot.edit_message_text(f"🎓 **تخصص {fac_title} - المستوى {level_num}**\nاختر الإجراء المطلوب:", call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode="Markdown")
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("getfiles_") or call.data.startswith("schedule_") or call.data.startswith("group_"))
 def handle_level_actions(call):
@@ -250,27 +268,28 @@ def contact_support(message):
     bot.reply_to(message, "💬 لأي استفسار أو مشكلة تقنية تواجهك داخل البوت، يرجى التواصل مع إدارة البوت أو مشرف القسم.")
 
 
-# ==================== لوحة تحكم الأدمن الرئيسية المقسمة ====================
+# ==================== لوحة تحكم الأدمن المرتبة حسب الأقسام والمستويات ====================
 
 @bot.message_handler(func=lambda msg: msg.text == "👑 لوحة تحكم الأدمن الشاملة")
 def admin_main_panel(message):
-    if not is_admin(message.from_user.id):
+    user_id = message.from_user.id
+    if not is_admin(user_id):
         bot.reply_to(message, "❌ عذراً، هذا القسم مخصص للمشرفين فقط.")
         return
 
     markup = types.InlineKeyboardMarkup(row_width=1)
     markup.add(
-        types.InlineKeyboardButton("👥 قسم إدارة الطلاب والمستخدمين", callback_data="adm_sec_students"),
-        types.InlineKeyboardButton("📁 قسم إدارة المحتوى والملفات", callback_data="adm_sec_content"),
-        types.InlineKeyboardButton("🛡️ قسم إدارة المشرفين والصلاحيات", callback_data="adm_sec_admins"),
-        types.InlineKeyboardButton("📢 الإذاعة والتنبيهات العامة", callback_data="adm_broadcast_start"),
+        types.InlineKeyboardButton("🛡️ أدمن قسم الأمن السيبراني", callback_data="adm_fac_cyber"),
+        types.InlineKeyboardButton("💻 أدمن قسم تقنية المعلومات (IT)", callback_data="adm_fac_it"),
+        types.InlineKeyboardButton("🏛️ أدمن قسم الهندسة المعمارية", callback_data="adm_fac_arch"),
+        types.InlineKeyboardButton("👥 إدارة العام (الطلاب والصلاحيات والإذاعة)", callback_data="adm_general_mgmt"),
         types.InlineKeyboardButton("🛠️ وضع الصيانة والإحصائيات", callback_data="adm_sec_system")
     )
-    bot.send_message(message.chat.id, "👑 **لوحة التحكم الإدارية المركزية:**\nاختر القسم المطلوب لإدارة محتوياته بدقة:", reply_markup=markup, parse_mode="Markdown")
+    bot.send_message(message.chat.id, "👑 **لوحة التحكم الإدارية المركزية المقسمة حسب التخصصات:**\nاختر القسم المطلوب لإدارة مستوياته وأزّراره الخاصة:", reply_markup=markup, parse_mode="Markdown")
 
 
-@bot.callback_query_handler(func=lambda call: call.data.startswith("adm_"))
-def admin_sections_callbacks(call):
+@bot.callback_query_handler(func=lambda call: call.data.startswith("adm_fac_") or call.data.startswith("adm_lvl_") or call.data == "adm_general_mgmt" or call.data == "adm_sec_system" or call.data == "adm_back_main" or call.data == "adm_toggle_maint" or call.data == "adm_statistics")
+def admin_sections_router(call):
     user_id = call.from_user.id
     if not is_admin(user_id):
         bot.answer_callback_query(call.id, "غير مأذون لك بالدخول!", show_alert=True)
@@ -279,75 +298,105 @@ def admin_sections_callbacks(call):
     conn = get_db()
     cursor = conn.cursor()
 
-    if call.data == "adm_sec_students":
-        markup = types.InlineKeyboardMarkup(row_width=1)
-        markup.add(
-            types.InlineKeyboardButton("🚫 حظر طالب من النظام", callback_data="user_ban_act"),
-            types.InlineKeyboardButton("🟢 إلغاء حظر طالب", callback_data="user_unban_act"),
-            types.InlineKeyboardButton("⭐ تعديل / تصفير نقاط طالب", callback_data="user_points_act"),
-            types.InlineKeyboardButton("💬 إرسال تنبيه فردي لطالب", callback_data="extra_send_notice"),
-            types.InlineKeyboardButton("🔙 رجوع للوحة الرئيسية", callback_data="adm_back_main")
-        )
-        bot.edit_message_text("👥 **قسم إدارة الطلاب:**\nتحكم بحسابات الطلاب، النقاط، والحظر:", call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode="Markdown")
+    # القائمة الرئيسية للأدمن
+    if call.data == "adm_back_main":
+        admin_main_panel_edit(call)
+        conn.close()
+        return
 
-    elif call.data == "adm_sec_content":
+    # التوجه لقائمة مستويات الأمن السيبراني
+    if call.data == "adm_fac_cyber":
         markup = types.InlineKeyboardMarkup(row_width=1)
         markup.add(
-            types.InlineKeyboardButton("➕ رفع وإضافة ملف جديد للأقسام", callback_data="file_add_step"),
-            types.InlineKeyboardButton("🗑️ حذف ملف من الأرشيف", callback_data="file_del_step"),
+            types.InlineKeyboardButton("1️⃣ أدمن المستوى الأول (أمن سيبراني)", callback_data="adm_lvl_cyber_1"),
+            types.InlineKeyboardButton("2️⃣ أدمن المستوى الثاني (أمن سيبراني)", callback_data="adm_lvl_cyber_2"),
+            types.InlineKeyboardButton("3️⃣ أدمن المستوى الثالث (أمن سيبراني)", callback_data="adm_lvl_cyber_3"),
+            types.InlineKeyboardButton("4️⃣ أدمن المستوى الرابع (أمن سيبراني)", callback_data="adm_lvl_cyber_4"),
             types.InlineKeyboardButton("🔙 رجوع للوحة الرئيسية", callback_data="adm_back_main")
         )
-        bot.edit_message_text("📁 **قسم إدارة المحتوى والملفات:**\nتحكم بالملازم والملفات الدراسية:", call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode="Markdown")
+        bot.edit_message_text("🛡️ **إدارة قسم الأمن السيبراني:**\nاختر المستوى المطلوب لإدارته وتحكم بمحتوياته:", call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode="Markdown")
 
-    elif call.data == "adm_sec_admins":
+    # التوجه لقائمة مستويات تقنية المعلومات
+    elif call.data == "adm_fac_it":
         markup = types.InlineKeyboardMarkup(row_width=1)
         markup.add(
-            types.InlineKeyboardButton("👥 لوحة التحكم بالمشرفين والصلاحيات", callback_data="extra_perms"),
-            types.InlineKeyboardButton("👑 ترقية طالب إلى أدمن", callback_data="user_promote_act"),
-            types.InlineKeyboardButton("📦 سجل تدقيق نشاطات المشرفين (Logs)", callback_data="adm_logs_view"),
+            types.InlineKeyboardButton("1️⃣ أدمن المستوى الأول (تقنية معلومات)", callback_data="adm_lvl_it_1"),
+            types.InlineKeyboardButton("2️⃣ أدمن المستوى الثاني (تقنية معلومات)", callback_data="adm_lvl_it_2"),
+            types.InlineKeyboardButton("3️⃣ أدمن المستوى الثالث (تقنية معلومات)", callback_data="adm_lvl_it_3"),
+            types.InlineKeyboardButton("4️⃣ أدمن المستوى الرابع (تقنية معلومات)", callback_data="adm_lvl_it_4"),
             types.InlineKeyboardButton("🔙 رجوع للوحة الرئيسية", callback_data="adm_back_main")
         )
-        bot.edit_message_text("🛡️ **قسم إدارة المشرفين والصلاحيات:**\nإدارة الصلاحيات وسجلات التدقيق:", call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode="Markdown")
+        bot.edit_message_text("💻 **إدارة قسم تقنية المعلومات (IT):**\nاختر المستوى المطلوب لإدارته وتحكم بمحتوياته:", call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode="Markdown")
+
+    # التوجه لقائمة مستويات الهندسة المعمارية
+    elif call.data == "adm_fac_arch":
+        markup = types.InlineKeyboardMarkup(row_width=1)
+        markup.add(
+            types.InlineKeyboardButton("1️⃣ أدمن المستوى الأول (هندسة معمارية)", callback_data="adm_lvl_arch_1"),
+            types.InlineKeyboardButton("2️⃣ أدمن المستوى الثاني (هندسة معمارية)", callback_data="adm_lvl_arch_2"),
+            types.InlineKeyboardButton("3️⃣ أدمن المستوى الثالث (هندسة معمارية)", callback_data="adm_lvl_arch_3"),
+            types.InlineKeyboardButton("4️⃣ أدمن المستوى الرابع (هندسة معمارية)", callback_data="adm_lvl_arch_4"),
+            types.InlineKeyboardButton("🔙 رجوع للوحة الرئيسية", callback_data="adm_back_main")
+        )
+        bot.edit_message_text("🏛️ **إدارة قسم الهندسة المعمارية:**\nاختر المستوى المطلوب لإدارته وتحكم بمحتوياته:", call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode="Markdown")
+
+    # التحكم الخاص بمستوى محدد داخل التخصص
+    elif call.data.startswith("adm_lvl_"):
+        parts = call.data.split("_")
+        prefix = parts[2] # cyber, it, arch
+        lvl = parts[3] # 1, 2, 3, 4
+        sec_key = f"{prefix}_{lvl}"
+        
+        if not is_owner(user_id) and not has_section_permission(user_id, sec_key):
+            bot.answer_callback_query(call.id, "❌ عذراً، لست مشرفاً مخولاً لهذا المستوى المخصص!", show_alert=True)
+            conn.close()
+            return
+            
+        fac_names = {"cyber": "الأمن السيبراني", "it": "تقنية المعلومات", "arch": "الهندسة المعمارية"}
+        markup = types.InlineKeyboardMarkup(row_width=1)
+        markup.add(
+            types.InlineKeyboardButton("➕ رفع ملف جديد لهذا المستوى", callback_data=f"up_lvl_{sec_key}"),
+            types.InlineKeyboardButton("🗑️ حذف ملف من هذا المستوى", callback_data=f"del_lvl_{sec_key}"),
+            types.InlineKeyboardButton(f"🔙 رجوع لقسم {fac_names.get(prefix)}", callback_data=f"adm_fac_{prefix}")
+        )
+        bot.edit_message_text(f"⚙️ **لوحة تحكم مشرف: {fac_names.get(prefix)} - المستوى {lvl}**\nاختر العملية الإدارية المطلوبة:", call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode="Markdown")
+
+    # إدارة العام (الطلاب والصلاحيات والإذاعة)
+    elif call.data == "adm_general_mgmt":
+        if not is_owner(user_id):
+            bot.answer_callback_query(call.id, "❌ هذا القسم مخصص لمالك البوت فقط!", show_alert=True)
+            conn.close()
+            return
+        markup = types.InlineKeyboardMarkup(row_width=1)
+        markup.add(
+            types.InlineKeyboardButton("🚫 حظر / إلغاء حظر طالب", callback_data="user_ban_act"),
+            types.InlineKeyboardButton("⭐ تعديل نقاط طالب", callback_data="user_points_act"),
+            types.InlineKeyboardButton("👑 تعيين أدمن عام أو لمستوى معين", callback_data="user_promote_act"),
+            types.InlineKeyboardButton("📢 الإذاعة والتنبيهات العامة", callback_data="adm_broadcast_start"),
+            types.InlineKeyboardButton("🔙 رجوع للوحة الرئيسية", callback_data="adm_back_main")
+        )
+        bot.edit_message_text("👥 **إدارة المستخدمين والصلاحيات العامة:**", call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode="Markdown")
 
     elif call.data == "adm_sec_system":
         cursor.execute("SELECT COUNT(*) FROM users")
         total_u = cursor.fetchone()[0]
         cursor.execute("SELECT COUNT(*) FROM files")
         total_f = cursor.fetchone()[0]
-        cursor.execute("SELECT COUNT(*) FROM users WHERE is_banned=1")
-        banned_u = cursor.fetchone()[0]
         cursor.execute("SELECT value FROM settings WHERE key='maintenance'")
         maint_status = cursor.fetchone()[0].upper()
         
         stats = (
             f"🛠️ **قسم النظام وإحصائيات البوت:**\n\n"
-            f"👥 إجمالي الطلاب المسجلين: `{total_u}`\n"
-            f"🚫 عدد المحظورين: `{banned_u}`\n"
-            f"📁 إجمالي الملفات المرفوعة: `{total_f}`\n"
-            f"⚙️ حالة الصيانة الحالية: `{maint_status}`\n"
+            f"👥 إجمالي الطلاب: `{total_u}`\n"
+            f"📁 إجمالي الملفات: `{total_f}`\n"
+            f"⚙️ حالة الصيانة: `{maint_status}`\n"
         )
         markup = types.InlineKeyboardMarkup(row_width=1)
         markup.add(
-            types.InlineKeyboardButton("🛠️ تبديل وضع الصيانة (تشغيل/إيقاف)", callback_data="adm_toggle_maint"),
-            types.InlineKeyboardButton("📊 عرض الإحصائيات الأكاديمية الشاملة", callback_data="adm_statistics"),
+            types.InlineKeyboardButton("🛠️ تبديل وضع الصيانة", callback_data="adm_toggle_maint"),
             types.InlineKeyboardButton("🔙 رجوع للوحة الرئيسية", callback_data="adm_back_main")
         )
         bot.edit_message_text(stats, call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode="Markdown")
-
-    elif call.data == "adm_broadcast_start":
-        msg = bot.send_message(call.message.chat.id, "📢 أرسل الرسالة أو الوسائط التي تريد إذاعتها لجميع الطلاب الآن:")
-        bot.register_next_step_handler(msg, process_global_broadcast)
-
-    elif call.data == "adm_logs_view":
-        cursor.execute("SELECT admin_id, action, timestamp FROM logs ORDER BY log_id DESC LIMIT 12")
-        logs = cursor.fetchall()
-        text = "📋 **سجلات نشاط المشرفين الأخيرة:**\n\n"
-        for l in logs:
-            text += f"▪️ المشرف: `{l[0]}`\n⚙️ الإجراء: {l[1]}\n⏱️ الوقت: {l[2]}\n-------------------\n"
-        
-        markup = types.InlineKeyboardMarkup()
-        markup.add(types.InlineKeyboardButton("🔙 رجوع لقسم المشرفين", callback_data="adm_sec_admins"))
-        bot.edit_message_text(text, call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode="Markdown")
 
     elif call.data == "adm_toggle_maint":
         cursor.execute("SELECT value FROM settings WHERE key='maintenance'")
@@ -355,104 +404,33 @@ def admin_sections_callbacks(call):
         new_state = 'off' if current == 'on' else 'on'
         cursor.execute("UPDATE settings SET value=? WHERE key='maintenance'", (new_state,))
         conn.commit()
-        log_action(user_id, f"تغيير وضع الصيانة إلى: {new_state}")
-        bot.answer_callback_query(call.id, f"تم تغيير وضع الصيانة بنجاح ليصبح: {new_state.upper()}", show_alert=True)
-
-    elif call.data == "adm_statistics":
-        cursor.execute("SELECT COUNT(*) FROM users")
-        total_u = cursor.fetchone()[0]
-        cursor.execute("SELECT COUNT(*) FROM files")
-        total_f = cursor.fetchone()[0]
-        cursor.execute("SELECT COUNT(*) FROM users WHERE is_banned=1")
-        banned_u = cursor.fetchone()[0]
-        stats = (
-            f"📊 **تقرير الإحصائيات الأكاديمية:**\n\n"
-            f"👥 إجمالي الطلاب: `{total_u}`\n"
-            f"🚫 المحظورين: `{banned_u}`\n"
-            f"📁 الملفات والملازم: `{total_f}`\n"
-        )
-        markup = types.InlineKeyboardMarkup()
-        markup.add(types.InlineKeyboardButton("🔙 رجوع لقسم النظام", callback_data="adm_sec_system"))
-        bot.edit_message_text(stats, call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode="Markdown")
-
-    elif call.data == "extra_perms":
-        bot.answer_callback_query(call.id, "تم الاستلام بنجاح. هذه الوظيفة قيد التفعيل الكامل.", show_alert=True)
-
-    elif call.data == "extra_send_notice":
-        bot.answer_callback_query(call.id, "تم الاستلام بنجاح. هذه الوظيفة قيد التفعيل الكامل.", show_alert=True)
-
-    elif call.data == "adm_back_main":
-        admin_main_panel_edit(call)
+        bot.answer_callback_query(call.id, f"تم تغيير وضع الصيانة إلى: {new_state.upper()}", show_alert=True)
 
     conn.close()
 
 def admin_main_panel_edit(call):
     markup = types.InlineKeyboardMarkup(row_width=1)
     markup.add(
-        types.InlineKeyboardButton("👥 قسم إدارة الطلاب والمستخدمين", callback_data="adm_sec_students"),
-        types.InlineKeyboardButton("📁 قسم إدارة المحتوى والملفات", callback_data="adm_sec_content"),
-        types.InlineKeyboardButton("🛡️ قسم إدارة المشرفين والصلاحيات", callback_data="adm_sec_admins"),
-        types.InlineKeyboardButton("📢 الإذاعة والتنبيهات العامة", callback_data="adm_broadcast_start"),
+        types.InlineKeyboardButton("🛡️ أدمن قسم الأمن السيبراني", callback_data="adm_fac_cyber"),
+        types.InlineKeyboardButton("💻 أدمن قسم تقنية المعلومات (IT)", callback_data="adm_fac_it"),
+        types.InlineKeyboardButton("🏛️ أدمن قسم الهندسة المعمارية", callback_data="adm_fac_arch"),
+        types.InlineKeyboardButton("👥 إدارة العام (الطلاب والصلاحيات والإذاعة)", callback_data="adm_general_mgmt"),
         types.InlineKeyboardButton("🛠️ وضع الصيانة والإحصائيات", callback_data="adm_sec_system")
     )
-    bot.edit_message_text("👑 **لوحة التحكم الإدارية المركزية:**\nاختر القسم المطلوب لإدارة محتوياته بدقة:", call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode="Markdown")
+    bot.edit_message_text("👑 **لوحة التحكم الإدارية المركزية المقسمة حسب التخصصات:**\nاختر القسم المطلوب لإدارة مستوياته وأزّراره الخاصة:", call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode="Markdown")
 
 
-# ==================== نظام رفع الملفات عبر الأزرار التفاعلية ====================
+# ==================== نظام الإذاعة والرفع ====================
 
-@bot.callback_query_handler(func=lambda call: call.data == "file_add_step")
-def ask_instructor_for_upload(call):
-    if not is_admin(call.from_user.id):
-        bot.answer_callback_query(call.id, "غير مأذون لك!", show_alert=True)
+@bot.callback_query_handler(func=lambda call: call.data == "adm_broadcast_start")
+def broadcast_prompt(call):
+    if not is_owner(call.from_user.id):
         return
-    bot.answer_callback_query(call.id)
-    
-    markup = types.InlineKeyboardMarkup(row_width=1)
-    markup.add(
-        types.InlineKeyboardButton("📚 د. أكرم الحداد", callback_data="upinst_د. أكرم الحداد"),
-        types.InlineKeyboardButton("📚 أ. فريال المقطري", callback_data="upinst_أ. فريال المقطري"),
-        types.InlineKeyboardButton("📚 أ. مصطفى", callback_data="upinst_أ. مصطفى"),
-        types.InlineKeyboardButton("📁 قسم عام / أخرى", callback_data="upinst_قسم عام"),
-        types.InlineKeyboardButton("🔙 رجوع لقسم المحتوى", callback_data="adm_sec_content")
-    )
-    bot.edit_message_text("📤 **اختر الأستاذ أو القسم الذي تريد إضافة الملف إليه:**", call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode="Markdown")
-
-@bot.callback_query_handler(func=lambda call: call.data.startswith("upinst_"))
-def receive_instructor_choice(call):
-    if not is_admin(call.from_user.id):
-        return
-    instructor_name = call.data.replace("upinst_", "")
-    bot.answer_callback_query(call.id)
-    
-    msg = bot.send_message(
-        call.message.chat.id, 
-        f"✅ لقد اخترت القسم: **{instructor_name}**\n\n📥 **أرسل الآن الملف (مستند، PDF، أو محاضرة)** وسيتم حفظه تلقائياً في هذا القسم:"
-    )
-    bot.register_next_step_handler(msg, lambda m: save_uploaded_file_by_choice(m, instructor_name))
-
-def save_uploaded_file_by_choice(message, instructor_name):
-    if not is_admin(message.from_user.id):
-        return
-    if not message.document and not message.video and not message.audio:
-        bot.reply_to(message, "❌ يرجى إرسال ملف صحيح (مستند أو وسائط). أعد المحاولة من لوحة التحكم.")
-        return
-        
-    file_id = message.document.file_id if message.document else message.video.file_id
-    file_name = message.document.file_name if message.document else "ملف تعليمي"
-    
-    conn = get_db()
-    cursor = conn.cursor()
-    cursor.execute("INSERT INTO files (category, instructor, file_id_tg, file_type, file_name) VALUES (?, ?, ?, ?, ?)",
-                   (instructor_name, instructor_name, file_id, "document", file_name))
-    conn.commit()
-    conn.close()
-    
-    log_action(message.from_user.id, f"رفع ملف تفاعلي: {file_name} إلى {instructor_name}")
-    bot.reply_to(message, f"🎉 **تم رفع وحفظ الملف بنجاح!**\n📂 القسم/الأستاذ: `{instructor_name}`\n📄 اسم الملف: `{file_name}`", parse_mode="Markdown")
-
+    msg = bot.send_message(call.message.chat.id, "📢 أرسل الرسالة أو الوسائط التي تريد إذاعتها لجميع الطلاب الآن:")
+    bot.register_next_step_handler(msg, process_global_broadcast)
 
 def process_global_broadcast(message):
-    if not is_admin(message.from_user.id):
+    if not is_owner(message.from_user.id):
         return
     conn = get_db()
     cursor = conn.cursor()
@@ -470,9 +448,8 @@ def process_global_broadcast(message):
         except Exception:
             failed += 1
 
-    log_action(message.from_user.id, f"إذاعة عامة (نجاح: {success}, فشل: {failed})")
-    bot.edit_message_text(f"✅ **تمت الإذاعة بنجاح!**\n- تم الإرسال إلى: `{success}` طالب\n- فشل لـ: `{failed}` مستخدم", 
-                          message.chat.id, status_msg.message_id, parse_mode="Markdown")
+    log_action(message.from_user.id, f"إذاعة عامة (نجاح: {success})")
+    bot.edit_message_text(f"✅ **تمت الإذاعة بنجاح!**\n- تم الإرسال إلى: `{success}` طالب", message.chat.id, status_msg.message_id, parse_mode="Markdown")
 
 @bot.callback_query_handler(func=lambda call: call.data == "main_menu_cb")
 def back_to_main(call):
@@ -481,7 +458,7 @@ def back_to_main(call):
 
 
 if __name__ == "__main__":
-    print("🚀 البوت المطور والشامل يعمل الآن بكفاءة واستقرار تام...")
+    print("🚀 البوت المطور يعمل بكفاءة وتنسيق إداري تام...")
     while True:
         try:
             bot.infinity_polling(timeout=60, long_polling_timeout=60)
