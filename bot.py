@@ -1,768 +1,359 @@
-import os
 import sqlite3
-import logging
-import random
-import threading
-from flask import Flask
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import (
-    ApplicationBuilder,
-    ContextTypes,
-    CommandHandler,
-    CallbackQueryHandler,
-    MessageHandler,
-    filters,
-)
+import telebot
+from telebot import types
 
-# ==========================================
-# 1. إعداد خادم الويب (Flask Server)
-# ==========================================
-app_web = Flask(__name__)
+TOKEN = "YOUR_BOT_TOKEN_HERE"
+bot = telebot.TeleBot(TOKEN)
 
-@app_web.route("/")
-def home():
-    return """
-    <!DOCTYPE html>
-    <html lang="ar" dir="rtl">
-        <head>
-            <meta charset="UTF-8">
-            <title>Cyber-Ops Empire Dashboard</title>
-            <style>
-                body {
-                    background-color: #0d1117;
-                    color: #58a6ff;
-                    font-family: Arial, sans-serif;
-                    text-align: center;
-                    padding-top: 60px;
-                }
-                .container {
-                    border: 1px solid #30363d;
-                    padding: 30px;
-                    border-radius: 12px;
-                    display: inline-block;
-                    background-color: #161b22;
-                    box-shadow: 0 0 15px rgba(88, 166, 255, 0.2);
-                }
-                h1 { color: #58a6ff; margin-bottom: 10px; }
-                p { color: #8b949e; font-size: 1.1em; }
-                .status { color: #3fb950; font-weight: bold; }
-            </style>
-        </head>
-        <body>
-            <div class="container">
-                <h1>🛡️ أكاديمية الأمن السيبراني (Cyber-Ops Empire v4.7) 🛡️</h1>
-                <p>حالة السيرفر: <span class="status">● متصل ويعمل بكفاءة على Railway (Flask Webserver Active)</span></p>
-                <hr style="border: 0.5px solid #30363d; margin: 20px 0;">
-                <p>جميع حقوق إدارة وتأمين الأنظمة محفوظة للأكاديمية.</p>
-            </div>
-        </body>
-    </html>
-    """
+# الآيدي الخاص بالأدمن الأساسي
+OWNER_ID = 123456789  
 
-def run_flask_server():
-    port = int(os.environ.get("PORT", 8080))
-    app_web.run(host="0.0.0.0", port=port, debug=False, use_reloader=False)
-
-threading.Thread(target=run_flask_server, daemon=True).start()
-
-# ==========================================
-# 2. الإعدادات العامة للبوت وقواعد البيانات
-# ==========================================
-logging.basicConfig(
-    format="[DARK-LOG] %(asctime)s - %(levelname)s - %(message)s",
-    level=logging.INFO
-)
-logger = logging.getLogger(__name__)
-
-OWNER_ID = 8083038345
-BOT_TOKEN = "8969629386:AAFbTJaSmJ-9ADKjSLazu4LXfvxFyExd35o"
-
+# ==================== قاعدة البيانات والجدولة (Database Setup) ====================
 def init_db():
-    conn = sqlite3.connect("dark_cyber_academy.db")
+    conn = sqlite3.connect('bot_database.db', check_same_thread=False)
     cursor = conn.cursor()
-    cursor.execute("PRAGMA journal_mode=WAL;")
     
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS admins (
+    # جدول المستخدمين والصلاحيات
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS users (
             user_id INTEGER PRIMARY KEY,
-            role TEXT NOT NULL,
-            assigned_by INTEGER,
-            assigned_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    """)
-    
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS students (
-            student_id TEXT PRIMARY KEY,
-            user_id INTEGER UNIQUE,
-            name TEXT NOT NULL,
+            username TEXT,
+            fullname TEXT,
             points INTEGER DEFAULT 0,
-            status TEXT DEFAULT 'ACTIVE',
-            join_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            is_admin INTEGER DEFAULT 0,
+            is_banned INTEGER DEFAULT 0
         )
-    """)
+    ''')
     
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS audit_logs (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+    # جدول الأقسام والمحتوى الدراسي (مرتبط بالأساتذة / المواد)
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS files (
+            file_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            category TEXT,
+            instructor TEXT,
+            file_id_tg TEXT,
+            file_type TEXT,
+            file_name TEXT
+        )
+    ''')
+    
+    # سجلات النظام (Logs)
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS logs (
+            log_id INTEGER PRIMARY KEY AUTOINCREMENT,
             admin_id INTEGER,
-            action_desc TEXT,
-            timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            action TEXT,
+            timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
         )
-    """)
+    ''')
     
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS custom_main_sections (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            sec_key TEXT UNIQUE NOT NULL,
-            sec_name TEXT NOT NULL
+    # إعدادات النظام (مثل وضع الصيانة)
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS settings (
+            key TEXT PRIMARY KEY,
+            value TEXT
         )
-    """)
-
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS custom_sub_sections (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            main_type TEXT NOT NULL,
-            sec_key TEXT NOT NULL,
-            sec_name TEXT NOT NULL
-        )
-    """)
-    
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS content (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            main_type TEXT NOT NULL,
-            sec_key TEXT NOT NULL,
-            item_name TEXT NOT NULL,
-            file_id TEXT NOT NULL,
-            file_type TEXT NOT NULL,
-            points_cost INTEGER DEFAULT 0,
-            uploaded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    """)
-    
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS submissions (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            student_id TEXT,
-            student_name TEXT,
-            task_info TEXT,
-            file_id TEXT,
-            status TEXT DEFAULT 'قيد المراجعة السيبرانية',
-            submitted_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    """)
-
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS quizzes (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            question TEXT NOT NULL,
-            opt1 TEXT NOT NULL,
-            opt2 TEXT NOT NULL,
-            opt3 TEXT NOT NULL,
-            correct_opt INTEGER NOT NULL,
-            reward_points INTEGER DEFAULT 10
-        )
-    """)
+    ''')
+    cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('maintenance', 'off')")
     
     conn.commit()
     conn.close()
 
 init_db()
 
-def log_admin_action(admin_id, desc):
-    try:
-        conn = sqlite3.connect("dark_cyber_academy.db")
-        cursor = conn.cursor()
-        cursor.execute("INSERT INTO audit_logs (admin_id, action_desc) VALUES (?, ?)", (admin_id, desc))
-        conn.commit()
-        conn.close()
-    except Exception as e:
-        logger.error(f"Error logging action: {e}")
+def get_db():
+    return sqlite3.connect('bot_database.db', check_same_thread=False)
 
-def get_user_role(user_id):
+def is_admin(user_id):
     if user_id == OWNER_ID:
-        return "dark_lord"
-    try:
-        conn = sqlite3.connect("dark_cyber_academy.db")
-        cursor = conn.cursor()
-        cursor.execute("SELECT role FROM admins WHERE user_id = ?", (user_id,))
-        row = cursor.fetchone()
-        conn.close()
-        return row[0] if row else None
-    except Exception:
-        return None
-
-def is_student_banned(user_id):
-    try:
-        conn = sqlite3.connect("dark_cyber_academy.db")
-        cursor = conn.cursor()
-        cursor.execute("SELECT status FROM students WHERE user_id = ?", (user_id,))
-        row = cursor.fetchone()
-        conn.close()
-        return row and row[0] == "BANNED"
-    except Exception:
-        return False
-
-def generate_unique_student_id():
-    conn = sqlite3.connect("dark_cyber_academy.db")
+        return True
+    conn = get_db()
     cursor = conn.cursor()
-    while True:
-        sid = str(random.randint(100000, 999999))
-        cursor.execute("SELECT student_id FROM students WHERE student_id = ?", (sid,))
-        if not cursor.fetchone():
-            conn.close()
-            return sid
+    cursor.execute("SELECT is_admin FROM users WHERE user_id = ?", (user_id,))
+    res = cursor.fetchone()
+    conn.close()
+    return res and res[0] == 1
 
-admin_state = {}
+def log_action(admin_id, action):
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute("INSERT INTO logs (admin_id, action) VALUES (?, ?)", (admin_id, action))
+    conn.commit()
+    conn.close()
 
-default_main_sections = {
-    "pdf": "📄 مكتبة أبحاث وكتب السيبراني المتقدمة",
-    "tools": "🛠️ ترسانة أدوات وسكربتات الاختراق",
-    "labs": "💻 مختبرات وتحديات CTF السيبرانية",
-    "videos": "🎬 كورسات مرئية ودورات النخبة",
-    "malware": "🛡️ هندسة التحليل العكسي للماوير",
-    "extra": "📁 ملفات اضافية"
-}
+def check_maintenance(user_id):
+    if user_id == OWNER_ID or is_admin(user_id):
+        return False
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute("SELECT value FROM settings WHERE key = 'maintenance'")
+    res = cursor.fetchone()
+    conn.close()
+    return res and res[0] == 'on'
 
-def get_all_main_sections():
-    sections = dict(default_main_sections)
-    try:
-        conn = sqlite3.connect("dark_cyber_academy.db")
-        cursor = conn.cursor()
-        cursor.execute("SELECT sec_key, sec_name FROM custom_main_sections")
-        for row in cursor.fetchall():
-            sections[row[0]] = row[1]
+
+# ==================== الواجهة الرئيسية (Main Handlers) ====================
+
+@bot.message_handler(commands=['start'])
+def send_welcome(message):
+    user_id = message.from_user.id
+    username = message.from_user.username
+    fullname = message.from_user.full_name
+    
+    if check_maintenance(user_id):
+        bot.reply_to(message, "🛠️ البوت في وضع الصيانة حالياً للتحديثات الدورية. يرجى العودة لاحقاً.")
+        return
+
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute("SELECT is_banned FROM users WHERE user_id = ?", (user_id,))
+    row = cursor.fetchone()
+    
+    if row and row[0] == 1:
+        bot.reply_to(message, "❌ عذراً، تم حظرك من استخدام هذا البوت.")
         conn.close()
-    except Exception:
-        pass
-    return sections
-
-# ==========================================
-# 3. معالجة أوامر وأزرار البوت
-# ==========================================
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    try:
-        user_id = update.effective_user.id
-        if is_student_banned(user_id):
-            await update.message.reply_text("⛔ **حسابك محظور من استخدام النظام السيبراني.**")
-            return
-
-        if user_id in admin_state:
-            del admin_state[user_id]
-            
-        role = get_user_role(user_id)
-        conn = sqlite3.connect("dark_cyber_academy.db")
-        cursor = conn.cursor()
-        cursor.execute("SELECT student_id, name, points FROM students WHERE user_id = ?", (user_id,))
-        student_row = cursor.fetchone()
-        conn.close()
-
-        if not student_row and not role:
-            admin_state[user_id] = {"action": "wait_self_registration_name"}
-            await update.message.reply_text(
-                "🥷 **مرحباً بك في أكاديمية الأمن السيبراني (Cyber-Ops Empire v4.7)**\n\n"
-                "أنت تسجل لأول مرة في النظام. يرجى كتابة **اسمك الثلاثي** لحفظه في قاعدة البيانات وتوليد الآيدي الخاص بك:"
-            )
-            return
-
-        keyboard = []
-        m_sections = get_all_main_sections()
-        for sec_key, sec_name in m_sections.items():
-            keyboard.append([InlineKeyboardButton(sec_name, callback_data=f"main_{sec_key}")])
+        return
         
-        keyboard.append([InlineKeyboardButton("🔍 الاستعلام الشامل عن الملف الأكاديمي بالآيدي", callback_data="student_lookup_prompt")])
-        keyboard.append([InlineKeyboardButton("📋 طلب مراجعة معلومات الطالب وتعديلها", callback_data="student_update_request")])
-        keyboard.append([InlineKeyboardButton("📤 رفع وإرسال حل مهمة / واجب عملي", callback_data="submit_task_prompt")])
-        keyboard.append([InlineKeyboardButton("🛡️ تقرير الثغرات الأمنية (Vulnerability Report)", callback_data="vuln_report_prompt")])
-        keyboard.append([InlineKeyboardButton("🔍 فحص الروابط والملفات المشبوهة", callback_data="scan_links_prompt")])
-        keyboard.append([InlineKeyboardButton("🧠 تحدي واختبار مهارات السيبراني الفوري", callback_data="start_quick_quiz")])
-        keyboard.append([InlineKeyboardButton("📞 التواصل مع المشرفين وغرفة الدعم", callback_data="support_chat_prompt")])
+    if not row:
+        admin_val = 1 if user_id == OWNER_ID else 0
+        cursor.execute("INSERT OR IGNORE INTO users (user_id, username, fullname, is_admin) VALUES (?, ?, ?, ?)",
+                       (user_id, username, fullname, admin_val))
+        conn.commit()
+    conn.close()
 
-        if role:
-            keyboard.append([InlineKeyboardButton("👑 غرفة العمليات المركزية وسيادة الإدارة", callback_data="admin_main")])
-            
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        welcome_msg = f"🥷 **أهلاً بك مجدداً في المحطة المركزية**"
-        if student_row:
-            welcome_msg = f"🥷 **أهلاً بك أيها المتدرب ({student_row[1]})**\n🆔 الآيدي: `{student_row[0]}` | ⭐ رصيدك: `{student_row[2]}` نقطة"
-
-        await update.message.reply_text(welcome_msg, reply_markup=reply_markup, parse_mode="Markdown")
-    except Exception as e:
-        logger.error(f"Error in start command: {e}")
-
-async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    try:
-        query = update.callback_query
-        await query.answer()
-        user_id = query.from_user.id
+    # لوحة المفاتيح الرئيسية للطلاب والمستخدمين
+    markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
+    markup.add("📂 تصفح الأقسام والملازم", "👨‍🏫 قسم الأساتذة والمواد")
+    markup.add("⭐ نقاطي ومعلوماتي", "📞 التواصل والدعم الفني")
+    
+    if is_admin(user_id):
+        markup.add("👑 لوحة تحكم الأدمن الشاملة")
         
-        if is_student_banned(user_id):
-            await query.message.reply_text("⛔ حسابك محظور.")
-            return
+    bot.send_message(message.chat.id, f"مرحباً بك يا {fullname} في البوت الأكاديمي الشامل 🎓\nاختر من الأزرار بالأسفل للبدء:", reply_markup=markup)
 
-        data = query.data
-        role = get_user_role(user_id)
 
-        if data == "back_home":
-            if user_id in admin_state:
-                del admin_state[user_id]
-            await start(update, context)
-            return
+# ==================== الأقسام التفاعلية العامة ====================
 
-        # عرض الأقسام ومحتوياتها وتكلفة النقاط
-        if data.startswith("main_"):
-            sec_key = data.replace("main_", "")
-            m_sections = get_all_main_sections()
-            sec_title = m_sections.get(sec_key, "القسم")
-            
-            conn = sqlite3.connect("dark_cyber_academy.db")
-            cursor = conn.cursor()
-            cursor.execute("SELECT id, item_name, points_cost FROM content WHERE main_type = ?", (sec_key,))
-            items = cursor.fetchall()
-            conn.close()
-            
-            keyboard = []
-            if items:
-                for item in items:
-                    cost_text = f" (مجاناً)" if item[2] == 0 else f" (⭐ {item[2]} نقاط)"
-                    keyboard.append([InlineKeyboardButton(f"📁 {item[1]}{cost_text}", callback_data=f"get_item_{item[0]}")])
-            else:
-                keyboard.append([InlineKeyboardButton("⚠️ لا توجد ملفات مرفوعة في هذا القسم حالياً", callback_data="noop")])
-                
-            keyboard.append([InlineKeyboardButton("⬅️ رجوع للرئيسية", callback_data="back_home")])
-            
-            await query.edit_message_text(
-                text=f"📂 **{sec_title}**\n\nاختر الملف أو الأداة المطلوبة للتحميل:",
-                parse_mode="Markdown",
-                reply_markup=InlineKeyboardMarkup(keyboard)
-            )
-            return
+@bot.message_handler(func=lambda msg: msg.text == "📂 تصفح الأقسام والملازم")
+def show_categories(message):
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute("SELECT DISTINCT category FROM files")
+    cats = cursor.fetchall()
+    conn.close()
 
-        # معالجة تنزيل الملف مع التحقق من النقاط وخصمها تلقائياً
-        if data.startswith("get_item_"):
-            item_id = data.replace("get_item_", "")
-            conn = sqlite3.connect("dark_cyber_academy.db")
-            cursor = conn.cursor()
-            cursor.execute("SELECT item_name, file_id, file_type, points_cost FROM content WHERE id = ?", (item_id,))
-            item = cursor.fetchone()
-            
-            if not item:
-                conn.close()
-                await query.answer("⚠️ الملف غير موجود أو تم حذفه من الأرشيف.", show_alert=True)
-                return
-            
-            item_name, file_id, file_type, points_cost = item
-            
-            # إذا لم يكن المستخدم مشرفاً، نتحقق من نقاط الطالب ونخصمها
-            if not role and points_cost > 0:
-                cursor.execute("SELECT student_id, points FROM students WHERE user_id = ?", (user_id,))
-                student = cursor.fetchone()
-                
-                if not student:
-                    conn.close()
-                    await query.answer("⚠️ يجب عليك التسجيل كطالب أولاً لاستخدام النقاط وتحميل الملفات. اضغط /start", show_alert=True)
-                    return
-                
-                student_id, current_points = student
-                if current_points < points_cost:
-                    conn.close()
-                    await query.answer(f"❌ رصيدك غير كافٍ! هذا الملف يتطلب {points_cost} نقطة، بينما رصيدك الحالي {current_points} نقطة.", show_alert=True)
-                    return
-                
-                # خصم النقاط من رصيد الطالب
-                new_points = current_points - points_cost
-                cursor.execute("UPDATE students SET points = ? WHERE user_id = ?", (new_points, user_id))
-                conn.commit()
-                
-            conn.close()
-            
-            # إرسال الملف للمستخدم
-            if file_type == "document":
-                await context.bot.send_document(chat_id=user_id, document=file_id, caption=f"📁 {item_name}\n⭐ تم خصم التكلفة بنجاح.")
-            elif file_type == "photo":
-                await context.bot.send_photo(chat_id=user_id, photo=file_id, caption=f"📁 {item_name}\n⭐ تم خصم التكلفة بنجاح.")
-            elif file_type == "video":
-                await context.bot.send_video(chat_id=user_id, video=file_id, caption=f"📁 {item_name}\n⭐ تم خصم التكلفة بنجاح.")
-            elif file_type == "audio":
-                await context.bot.send_audio(chat_id=user_id, audio=file_id, caption=f"📁 {item_name}\n⭐ تم خصم التكلفة بنجاح.")
-            else:
-                await query.message.reply_text(f"📁 الملف: {item_name}")
-            return
-
-        if data == "student_lookup_prompt":
-            conn = sqlite3.connect("dark_cyber_academy.db")
-            cursor = conn.cursor()
-            cursor.execute("SELECT student_id, name, points, join_date FROM students WHERE user_id = ?", (user_id,))
-            st = cursor.fetchone()
-            conn.close()
-            
-            if st:
-                await query.message.reply_text(
-                    f"🔍 **ملفك الأكاديمي السيبراني:**\n\n"
-                    f"👤 الاسم: `{st[1]}`\n"
-                    f"🆔 الآيدي: `{st[0]}`\n"
-                    f"⭐ النقاط: `{st[2]}` نقطة\n"
-                    f"📅 تاريخ الانضمام: `{st[3]}`",
-                    parse_mode="Markdown"
-                )
-            else:
-                await query.message.reply_text("⚠️ لم يتم العثور على سجل أكاديمي مرتبط بحسابك. اضغط /start للتسجيل.")
-            return
-
-        elif data == "student_update_request":
-            await query.message.reply_text("📋 لإعادة تعديل معلوماتك أو اسمك، يرجى التواصل مباشرة مع المشرفين عبر زر الدعم الفني.", parse_mode="Markdown")
-            return
-
-        elif data == "submit_task_prompt":
-            admin_state[user_id] = {"action": "wait_task_submission"}
-            await query.message.reply_text("📤 يرجى إرسال تفاصيل حل المهمة أو الواجب العملي (يمكنك إرسال نص أو ملف وسائط):", parse_mode="Markdown")
-            return
-
-        elif data == "vuln_report_prompt":
-            admin_state[user_id] = {"action": "wait_vuln_report"}
-            await query.message.reply_text("🛡️ يرجى كتابة تفاصيل تقرير الثغرة الأمنية المراد إرسالها لفريق الإدارة:", parse_mode="Markdown")
-            return
-
-        elif data == "scan_links_prompt":
-            await query.message.reply_text("🔍 ميزة فحص الروابط والملفات قيد التفعيل الأمني، أرسل الرابط مباشرة وسيتم مراجعته.", parse_mode="Markdown")
-            return
-
-        elif data == "start_quick_quiz":
-            conn = sqlite3.connect("dark_cyber_academy.db")
-            cursor = conn.cursor()
-            cursor.execute("SELECT id, question, opt1, opt2, opt3, reward_points FROM quizzes ORDER BY RANDOM() LIMIT 1")
-            q = cursor.fetchone()
-            conn.close()
-            
-            if not q:
-                await query.message.reply_text("🧠 لا توجد اختبارات أو تحديات سيبرانية مضافة حالياً من قبل الإدارة. انتظر ريثما يتم زرع تحديات جديدة.")
-                return
-            
-            keyboard = [
-                [InlineKeyboardButton(q[2], callback_data=f"quiz_{q[0]}_1")],
-                [InlineKeyboardButton(q[3], callback_data=f"quiz_{q[0]}_2")],
-                [InlineKeyboardButton(q[4], callback_data=f"quiz_{q[0]}_3")],
-                [InlineKeyboardButton("⬅️ رجوع للرئيسية", callback_data="back_home")]
-            ]
-            await query.edit_message_text(
-                text=f"🧠 **تحدي المهارات السيبرانية الفوري:**\n\n❓ {q[1]}\n\n⭐ المكافأة: `{q[5]}` نقاط",
-                parse_mode="Markdown",
-                reply_markup=InlineKeyboardMarkup(keyboard)
-            )
-            return
-
-        elif data == "support_chat_prompt":
-            admin_state[user_id] = {"action": "wait_support_message"}
-            await query.message.reply_text("📞 أرسل رسالتك أو استفسارك وسيتم تحويله إلى غرفة العمليات والمشرفين فوراً:", parse_mode="Markdown")
-            return
-
-        # حل الأسئلة وكسب النقاط
-        if data.startswith("quiz_"):
-            parts = data.split("_")
-            quiz_id = parts[1]
-            chosen_opt = int(parts[2])
-            
-            conn = sqlite3.connect("dark_cyber_academy.db")
-            cursor = conn.cursor()
-            cursor.execute("SELECT correct_opt, reward_points FROM quizzes WHERE id = ?", (quiz_id,))
-            q_data = cursor.fetchone()
-            
-            if not q_data:
-                conn.close()
-                await query.answer("⚠️ انتهت صلاحية هذا التحدي.", show_alert=True)
-                return
-            
-            correct_opt, reward_points = q_data
-            if chosen_opt == correct_opt:
-                cursor.execute("UPDATE students SET points = points + ? WHERE user_id = ?", (reward_points, user_id))
-                conn.commit()
-                conn.close()
-                await query.edit_message_text(
-                    text=f"🎉 **إجابة صحيحة!**\nتم إضافة `{reward_points}` نقاط إلى رصيدك السيبراني بنجاح.",
-                    parse_mode="Markdown",
-                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ رجوع للرئيسية", callback_data="back_home")]])
-                )
-            else:
-                conn.close()
-                await query.edit_message_text(
-                    text="❌ **إجابة خاطئة!**\nحاول مجدداً في تحديات أخرى لتعويض النقاط.",
-                    parse_mode="Markdown",
-                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ رجوع للرئيسية", callback_data="back_home")]])
-                )
-            return
-
-        if data == "admin_main":
-            if not role:
-                await query.answer("مرفوض! هذه المنطقة خاصة بالسيد والمشرفين فقط.", show_alert=True)
-                return
-            
-            keyboard = [
-                [InlineKeyboardButton("📤 رفع ملف مع تحديد تكلفة النقاط", callback_data="admin_upload_file")],
-                [InlineKeyboardButton("⭐ إضافة / تعديل نقاط طالب", callback_data="admin_add_points_prompt")],
-                [InlineKeyboardButton("📊 عرض إحصائيات الأكاديمية", callback_data="admin_academy_stats")],
-                [InlineKeyboardButton("⬅️ رجوع للرئيسية", callback_data="back_home")]
-            ]
-            
-            await query.edit_message_text(
-                text=f"👑 **غرفة القيادة العليا (مستوى السيادة: `{role}`):**\nاختر العملية الإدارية المطلوبة:",
-                parse_mode="Markdown",
-                reply_markup=InlineKeyboardMarkup(keyboard)
-            )
-
-        elif data == "admin_upload_file":
-            if not role:
-                return
-            m_sections = get_all_main_sections()
-            keyboard = []
-            for sec_key, sec_name in m_sections.items():
-                keyboard.append([InlineKeyboardButton(sec_name, callback_data=f"upload_to_{sec_key}")])
-            keyboard.append([InlineKeyboardButton("⬅️ رجوع", callback_data="admin_main")])
-            
-            await query.edit_message_text(
-                text="📤 **رفع ملف جديد:**\nاختر القسم المراد رفع الملف إليه:",
-                parse_mode="Markdown",
-                reply_markup=InlineKeyboardMarkup(keyboard)
-            )
-            return
-
-        elif data.startswith("upload_to_"):
-            if not role:
-                return
-            sec_key = data.replace("upload_to_", "")
-            admin_state[user_id] = {"action": "wait_file_cost", "main_type": sec_key}
-            await query.message.reply_text(
-                "💰 **تحديد تكلفة النقاط:**\n"
-                "أرسل الآن **عدد النقاط المطلوب لتنزيل هذا الملف** (أرسل `0` إذا كان الملف مجانياً):",
-                parse_mode="Markdown"
-            )
-            return
-
-        elif data == "admin_add_points_prompt":
-            if not role:
-                return
-            admin_state[user_id] = {"action": "wait_for_points_input"}
-            await query.message.reply_text(
-                "⭐ **إضافة / خصم نقاط طالب:**\n\n"
-                "يرجى إرسال **آيدي الطالب** متبوعاً بـ **عدد النقاط** (استخدم القيمة بالسالب للخصم).\n"
-                "مثال للإضافة: `123456 50`",
-                parse_mode="Markdown"
-            )
-
-        elif data == "admin_academy_stats":
-            if not role:
-                return
-            conn = sqlite3.connect("dark_cyber_academy.db")
-            cursor = conn.cursor()
-            cursor.execute("SELECT COUNT(*) FROM students")
-            st_count = cursor.fetchone()[0]
-            cursor.execute("SELECT COUNT(*) FROM admins")
-            ad_count = cursor.fetchone()[0]
-            cursor.execute("SELECT COUNT(*) FROM content")
-            content_count = cursor.fetchone()[0]
-            conn.close()
-            await query.message.reply_text(
-                f"📊 **إحصائيات الأكاديمية السيبرانية:**\n\n"
-                f"👥 إجمالي الطلاب المسجلين: `{st_count}`\n"
-                f"🛡️ إجمالي المشرفين: `{ad_count}`\n"
-                f"📁 إجمالي الملفات والمحتويات المرفوعة: `{content_count}`",
-                parse_mode="Markdown"
-            )
-    except Exception as e:
-        logger.error(f"Error in button_handler: {e}")
-
-async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    try:
-        user_id = update.effective_user.id
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    if cats:
+        for c in cats:
+            markup.add(types.InlineKeyboardButton(f"📁 قسم: {c[0]}", callback_data=f"showcat_{c[0]}"))
+    else:
+        markup.add(types.InlineKeyboardButton("⚠️ لا توجد أقسام مضافة حالياً", callback_data="none"))
         
-        if is_student_banned(user_id) or user_id not in admin_state:
-            return
+    bot.send_message(message.chat.id, "📁 **قائمة الأقسام الدراسية المتاحة:**", reply_markup=markup, parse_mode="Markdown")
 
-        state = admin_state[user_id]
-        action = state.get("action")
+@bot.message_handler(func=lambda msg: msg.text == "👨‍🏫 قسم الأساتذة والمواد")
+def show_instructors(message):
+    markup = types.InlineKeyboardMarkup(row_width=1)
+    markup.add(
+        types.InlineKeyboardButton("📚 ملفات د. أكرم الحداد", callback_data="inst_اكرم_الحداد"),
+        types.InlineKeyboardButton("📚 ملفات أ. فريال المقطري", callback_data="inst_فريال_المقطري"),
+        types.InlineKeyboardButton("📚 ملفات أ. مصطفى", callback_data="inst_مصطفى"),
+        types.InlineKeyboardButton("🔙 العودة للقائمة الرئيسية", callback_data="main_menu_cb")
+    )
+    bot.send_message(message.chat.id, "👨‍🏫 **اختر الأستاذ لعرض مواده وملفاته الدراسية:**", reply_markup=markup, parse_mode="Markdown")
 
-        if action == "wait_self_registration_name":
-            text = update.message.text
-            student_id = generate_unique_student_id()
-            conn = sqlite3.connect("dark_cyber_academy.db")
-            cursor = conn.cursor()
-            try:
-                cursor.execute(
-                    "INSERT INTO students (student_id, user_id, name, points) VALUES (?, ?, ?, ?)",
-                    (student_id, user_id, text, 0)
-                )
-                conn.commit()
-                del admin_state[user_id]
-                await update.message.reply_text(
-                    f"✅ **تم تسجيلك بنجاح في النظام السيبراني!**\n\n"
-                    f"👤 الاسم: `{text}`\n"
-                    f"🆔 الآيدي الخاص بك: `{student_id}`",
-                    parse_mode="Markdown"
-                )
-                await start(update, context)
-            except Exception as e:
-                await update.message.reply_text(f"⚠️ حدث خطأ أثناء التسجيل: {e}")
-            finally:
-                conn.close()
+@bot.message_handler(func=lambda msg: msg.text == "⭐ نقاطي ومعلوماتي")
+def my_profile(message):
+    user_id = message.from_user.id
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute("SELECT fullname, points, is_admin FROM users WHERE user_id = ?", (user_id,))
+    row = cursor.fetchone()
+    conn.close()
 
-        elif action == "wait_for_points_input":
-            text = update.message.text
-            parts = text.strip().split()
-            if len(parts) < 2:
-                await update.message.reply_text("⚠️ الصيغة خاطئة. يرجى إرسال الآيدي ومقدار النقاط هكذا: `123456 50`", parse_mode="Markdown")
-                return
-            
-            target_id = parts[0]
-            try:
-                points_to_add = int(parts[1])
-            except ValueError:
-                await update.message.reply_text("⚠️ مقدار النقاط يجب أن يكون رقماً صحيحاً.")
-                return
+    if row:
+        rank = "مشرف (أدمن) 👑" if row[2] == 1 or user_id == OWNER_ID else "طالب 🎓"
+        text = (
+            f"👤 **الملف الشخصي للطالب:**\n\n"
+            f"▪️ الاسم: `{row[0]}`\n"
+            f"▪️ الآيدي: `{user_id}`\n"
+            f"▪️ الرتبة الأكاديمية: `{rank}`\n"
+            f"▪️ رصيد النقاط: `⭐ {row[1]}`"
+        )
+        bot.reply_to(message, text, parse_mode="Markdown")
 
-            conn = sqlite3.connect("dark_cyber_academy.db")
-            cursor = conn.cursor()
-            cursor.execute("SELECT name, points FROM students WHERE student_id = ?", (target_id,))
-            st_row = cursor.fetchone()
-            
-            if not st_row:
-                conn.close()
-                await update.message.reply_text(f"❌ لم يتم العثور على طالب بالآيدي: `{target_id}`", parse_mode="Markdown")
-                return
+@bot.message_handler(func=lambda msg: msg.text == "📞 التواصل والدعم الفني")
+def contact_support(message):
+    bot.reply_to(message, "💬 لأي استفسار أو مشكلة تقنية تواجهك داخل البوت، يرجى التواصل مع إدارة البوت أو مشرف القسم.")
 
-            new_points = st_row[1] + points_to_add
-            cursor.execute("UPDATE students SET points = ? WHERE student_id = ?", (new_points, target_id))
-            conn.commit()
-            conn.close()
 
-            del admin_state[user_id]
-            log_admin_action(user_id, f"تعديل نقاط الطالب {target_id} بقيمة {points_to_add}")
-            
-            await update.message.reply_text(
-                f"✅ **تم تحديث نقاط الطالب بنجاح!**\n\n"
-                f"👤 اسم الطالب: `{st_row[0]}`\n"
-                f"🆔 الآيدي: `{target_id}`\n"
-                f"⭐ النقاط المضافة/المخصومة: `{points_to_add}`\n"
-                f"💰 الرصيد الجديد: `{new_points}` نقطة",
-                parse_mode="Markdown"
-            )
+# ==================== لوحة تحكم الأدمن الشاملة ومتفرعاتها ====================
 
-        elif action == "wait_file_cost":
-            try:
-                cost = int(update.message.text.strip())
-            except ValueError:
-                await update.message.reply_text("⚠️ يرجى إرسال رقم صحيح يمثل تكلفة النقاط (مثال: 10 أو 0).")
-                return
-            
-            main_type = state.get("main_type")
-            admin_state[user_id] = {"action": "wait_file_upload_data", "main_type": main_type, "points_cost": cost}
-            await update.message.reply_text("📥 تم حفظ التكلفة. الآن **أرسل الملف أو المستند** مع كتابة اسمه في التعليق (Caption):")
+@bot.message_handler(func=lambda msg: msg.text == "👑 لوحة تحكم الأدمن الشاملة")
+def admin_main_panel(message):
+    if not is_admin(message.from_user.id):
+        bot.reply_to(message, "❌ عذراً، هذا القسم مخصص للمشرفين فقط.")
+        return
 
-        elif action == "wait_file_upload_data":
-            main_type = state.get("main_type")
-            points_cost = state.get("points_cost", 0)
-            file_id = None
-            file_type = "document"
-            item_name = update.message.caption or update.message.text or "ملف سيبراني"
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        types.InlineKeyboardButton("📁 إدارة الملفات والمحتوى", callback_data="adm_sub_content"),
+        types.InlineKeyboardButton("👥 إدارة الطلاب والنقاط", callback_data="adm_sub_users"),
+        types.InlineKeyboardButton("📢 الإذاعة والتنبيهات", callback_data="adm_broadcast_start"),
+        types.InlineKeyboardButton("📋 سجلات النظام (Logs)", callback_data="adm_logs_view"),
+        types.InlineKeyboardButton("🛠️ وضع الصيانة", callback_data="adm_toggle_maint"),
+        types.InlineKeyboardButton("📊 إحصائيات البوت", callback_data="adm_statistics")
+    )
+    bot.send_message(message.chat.id, "👑 **لوحة التحكم الإدارية المركزية:**\nاختر القسم المطلوب للتنفيذ:", reply_markup=markup, parse_mode="Markdown")
 
-            if update.message.document:
-                file_id = update.message.document.file_id
-                file_type = "document"
-                if not update.message.caption and update.message.document.file_name:
-                    item_name = update.message.document.file_name
-            elif update.message.photo:
-                file_id = update.message.photo[-1].file_id
-                file_type = "photo"
-            elif update.message.video:
-                file_id = update.message.video.file_id
-                file_type = "video"
-            elif update.message.audio:
-                file_id = update.message.audio.file_id
-                file_type = "audio"
-            else:
-                admin_state[user_id] = {"action": "wait_file_upload_file", "main_type": main_type, "points_cost": points_cost, "item_name": update.message.text}
-                await update.message.reply_text("📥 تم حفظ اسم الملف. الآن **أرسل الملف أو المستند** المرفق لتتم عملية الحفظ نهائياً:")
-                return
 
-            if file_id:
-                conn = sqlite3.connect("dark_cyber_academy.db")
-                cursor = conn.cursor()
-                cursor.execute(
-                    "INSERT INTO content (main_type, sec_key, item_name, file_id, file_type, points_cost) VALUES (?, ?, ?, ?, ?, ?)",
-                    (main_type, "general", item_name, file_id, file_type, points_cost)
-                )
-                conn.commit()
-                conn.close()
+# معالجة أزرار الأدمن المتفرعة (Admin Sub-menus Callbacks)
+@bot.callback_query_handler(func=lambda call: call.data.startswith("adm_"))
+def admin_sub_callbacks(call):
+    user_id = call.from_user.id
+    if not is_admin(user_id):
+        bot.answer_callback_query(call.id, "غير مأذون لك بالدخول!", show_alert=True)
+        return
 
-                del admin_state[user_id]
-                log_admin_action(user_id, f"رفع ملف جديد '{item_name}' بتكلفة {points_cost} نقطة")
-                await update.message.reply_text(f"✅ **تم رفع وتخزين الملف بنجاح!**\n📁 اسم الملف: `{item_name}`\n⭐ التكلفة: `{points_cost}` نقطة", parse_mode="Markdown")
+    conn = get_db()
+    cursor = conn.cursor()
 
-        elif action == "wait_file_upload_file":
-            main_type = state.get("main_type")
-            points_cost = state.get("points_cost", 0)
-            item_name = state.get("item_name")
-            file_id = None
-            file_type = "document"
+    # 1. فرع إدارة الملفات
+    if call.data == "adm_sub_content":
+        markup = types.InlineKeyboardMarkup(row_width=1)
+        markup.add(
+            types.InlineKeyboardButton("➕ رفع وإضافة ملف جديد", callback_data="file_add_step"),
+            types.InlineKeyboardButton("🗑️ حذف ملف من الأرشيف", callback_data="file_del_step"),
+            types.InlineKeyboardButton("🔙 العودة للوحة الأدمن", callback_data="adm_back_main")
+        )
+        bot.edit_message_text("📁 **قسم إدارة المحتوى والملفات:**\nاختر الإجراء المناسب:", call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode="Markdown")
 
-            if update.message.document:
-                file_id = update.message.document.file_id
-                file_type = "document"
-            elif update.message.photo:
-                file_id = update.message.photo[-1].file_id
-                file_type = "photo"
-            elif update.message.video:
-                file_id = update.message.video.file_id
-                file_type = "video"
-            elif update.message.audio:
-                file_id = update.message.audio.file_id
-                file_type = "audio"
+    # 2. فرع إدارة الطلاب والمستخدمين
+    elif call.data == "adm_sub_users":
+        markup = types.InlineKeyboardMarkup(row_width=2)
+        markup.add(
+            types.InlineKeyboardButton("🚫 حظر طالب", callback_data="user_ban_act"),
+            types.InlineKeyboardButton("✅ إلغاء حظر", callback_data="user_unban_act"),
+            types.InlineKeyboardButton("⭐ تعديل نقاط طالب", callback_data="user_points_act"),
+            types.InlineKeyboardButton("👑 ترقية لأدمن", callback_data="user_promote_act"),
+            types.InlineKeyboardButton("🔙 العودة للوحة الأدمن", callback_data="adm_back_main")
+        )
+        bot.edit_message_text("👥 **قسم إدارة الطلاب والمستخدمين:**\nتحكم بصلاحيات وحسابات المستخدمين:", call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode="Markdown")
 
-            if file_id:
-                conn = sqlite3.connect("dark_cyber_academy.db")
-                cursor = conn.cursor()
-                cursor.execute(
-                    "INSERT INTO content (main_type, sec_key, item_name, file_id, file_type, points_cost) VALUES (?, ?, ?, ?, ?, ?)",
-                    (main_type, "general", item_name, file_id, file_type, points_cost)
-                )
-                conn.commit()
-                conn.close()
+    # 3. البث الإذاعي
+    elif call.data == "adm_broadcast_start":
+        msg = bot.send_message(call.message.chat.id, "📢 أرسل الرسالة أو الوسائط التي تريد إذاعتها لجميع الطلاب الآن:")
+        bot.register_next_step_handler(msg, process_global_broadcast)
 
-                del admin_state[user_id]
-                log_admin_action(user_id, f"رفع ملف جديد '{item_name}' بتكلفة {points_cost} نقطة")
-                await update.message.reply_text(f"✅ **تم رفع وتخزين الملف بنجاح!**\n📁 اسم الملف: `{item_name}`\n⭐ التكلفة: `{points_cost}` نقطة", parse_mode="Markdown")
-            else:
-                await update.message.reply_text("⚠️ يرجى إرسال ملف صالح (مستند، صورة، فيديو، أو صوت).")
-
-        elif action == "wait_task_submission":
-            del admin_state[user_id]
-            await update.message.reply_text("✅ **تم استلام حل المهمة بنجاح وتحويله إلى غرفة المراجعة السيبرانية للإدارة.**", parse_mode="Markdown")
-
-        elif action == "wait_vuln_report":
-            del admin_state[user_id]
-            await update.message.reply_text("🛡️ **تم رفع تقرير الثغرة الأمنية بنجاح إلى فريق سيادة الأكاديمية.** شكراً لجهودك.", parse_mode="Markdown")
-
-        elif action == "wait_support_message":
-            del admin_state[user_id]
-            await update.message.reply_text("📞 **تم إرسال رسالتك إلى غرفة الدعم الفني والمشرفين بنجاح.**", parse_mode="Markdown")
-
-    except Exception as e:
-        logger.error(f"Error in message_handler: {e}")
-
-# ==========================================
-# 4. نقطة البدء التشغيلية
-# ==========================================
-def main():
-    try:
-        app = ApplicationBuilder().token(BOT_TOKEN).build()
+    # 4. سجلات النظام
+    elif call.data == "adm_logs_view":
+        cursor.execute("SELECT admin_id, action, timestamp FROM logs ORDER BY log_id DESC LIMIT 12")
+        logs = cursor.fetchall()
+        text = "📋 **سجلات نشاط الأدمنز الأخيرة:**\n\n"
+        for l in logs:
+            text += f"▪️ الأدمن: `{l[0]}`\n⚙️ الإجراء: {l[1]}\n⏱️ الوقت: {l[2]}\n-------------------\n"
         
-        app.add_handler(CommandHandler("start", start))
-        app.add_handler(CallbackQueryHandler(button_handler))
-        app.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, message_handler))
-        
-        print("Starting Flask Web Server & Telegram Bot Polling simultaneously...")
-        app.run_polling()
-    except Exception as e:
-        logger.critical(f"Critical error starting bot: {e}")
+        markup = types.InlineKeyboardMarkup()
+        markup.add(types.InlineKeyboardButton("🔙 رجوع", callback_data="adm_sub_content"))
+        bot.edit_message_text(text, call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode="Markdown")
 
+    # 5. وضع الصيانة
+    elif call.data == "adm_toggle_maint":
+        cursor.execute("SELECT value FROM settings WHERE key='maintenance'")
+        current = cursor.fetchone()[0]
+        new_state = 'off' if current == 'on' else 'on'
+        cursor.execute("UPDATE settings SET value=? WHERE key='maintenance'", (new_state,))
+        conn.commit()
+        log_action(user_id, f"تغيير وضع الصيانة إلى: {new_state}")
+        bot.answer_callback_query(call.id, f"تم تغيير وضع الصيانة بنجاح ليصبح: {new_state.upper()}", show_alert=True)
+
+    # 6. إحصائيات البوت
+    elif call.data == "adm_statistics":
+        cursor.execute("SELECT COUNT(*) FROM users")
+        total_u = cursor.fetchone()[0]
+        cursor.execute("SELECT COUNT(*) FROM files")
+        total_f = cursor.fetchone()[0]
+        cursor.execute("SELECT COUNT(*) FROM users WHERE is_banned=1")
+        banned_u = cursor.fetchone()[0]
+        
+        stats = (
+            f"📊 **تقرير إحصائيات البوت الشاملة:**\n\n"
+            f"👥 إجمالي الطلاب المسجلين: `{total_u}`\n"
+            f"🚫 عدد المحظورين: `{banned_u}`\n"
+            f"📁 إجمالي الملفات والملازم المرفوعة: `{total_f}`\n"
+        )
+        markup = types.InlineKeyboardMarkup()
+        markup.add(types.InlineKeyboardButton("🔙 رجوع", callback_data="adm_back_main"))
+        bot.edit_message_text(stats, call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode="Markdown")
+
+    elif call.data == "adm_back_main":
+        admin_main_panel(call.message)
+
+    conn.close()
+
+# فرع تفاعلي لرفع الملفات (خطوات الإضافة)
+@bot.callback_query_handler(func=lambda call: call.data == "file_add_step")
+def ask_file_details(call):
+    msg = bot.send_message(call.message.chat.id, "📤 أرسل الآن الملف (مستند، PDF، أو محاضرة) مع كتابة اسم القسم واسم الأستاذ في وصف الملف (Caption).")
+    bot.register_next_step_handler(msg, save_uploaded_file)
+
+def save_uploaded_file(message):
+    if not is_admin(message.from_user.id):
+        return
+    if not message.document and not message.video and not message.audio:
+        bot.reply_to(message, "❌ يرجى إرسال ملف صحيح (مستند أو وسائط).")
+        return
+        
+    file_id = message.document.file_id if message.document else message.video.file_id
+    file_name = message.document.file_name if message.document else "ملف تعليمي"
+    caption = message.caption if message.caption else "عام / غير مصنف"
+    
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute("INSERT INTO files (category, instructor, file_id_tg, file_type, file_name) VALUES (?, ?, ?, ?, ?)",
+                   (caption, "عام", file_id, "document", file_name))
+    conn.commit()
+    conn.close()
+    
+    log_action(message.from_user.id, f"رفع ملف جديد: {file_name}")
+    bot.reply_to(message, f"✅ تم حفظ الملف وتصنيفه بنجاح تحت: [{caption}]")
+
+# معالجة البث الجماعي الآمن
+def process_global_broadcast(message):
+    if not is_admin(message.from_user.id):
+        return
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute("SELECT user_id FROM users WHERE is_banned = 0")
+    users = cursor.fetchall()
+    conn.close()
+
+    success, failed = 0, 0
+    status_msg = bot.send_message(message.chat.id, "⏳ جاري إرسال الإذاعة لجميع الطلاب...")
+
+    for u in users:
+        try:
+            bot.copy_message(chat_id=u[0], from_chat_id=message.chat.id, message_id=message.message_id)
+            success += 1
+        except Exception:
+            failed += 1
+
+    log_action(message.from_user.id, f"إذاعة عامة (نجاح: {success}, فشل: {failed})")
+    bot.edit_message_text(f"✅ **تمت الإذاعة بنجاح!**\n- تم الإرسال إلى: `{success}` طالب\n- فشل لـ: `{failed}` مستخدم", 
+                          message.chat.id, status_msg.message_id, parse_mode="Markdown")
+
+# العودة للقائمة الرئيسية عبر الكولباك
+@bot.callback_query_handler(func=lambda call: call.data == "main_menu_cb")
+def back_to_main(call):
+    bot.delete_message(call.message.chat.id, call.message.message_id)
+    send_welcome(call.message)
+
+
+# تشغيل البوت باستقرار تام
 if __name__ == "__main__":
-    main()
+    print("🚀 البوت المطور والشامل يعمل الآن بكفاءة واستقرار تام...")
+    while True:
+        try:
+            bot.infinity_polling(timeout=60, long_polling_timeout=60)
+        except Exception as e:
+            print(f"⚠️ تنبيه - حدث استثناء وتم إعادة الاتصال تلقائياً: {e}")
