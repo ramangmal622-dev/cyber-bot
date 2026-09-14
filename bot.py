@@ -63,7 +63,6 @@ def run_flask_server():
     port = int(os.environ.get("PORT", 8080))
     app_web.run(host="0.0.0.0", port=port, debug=False, use_reloader=False)
 
-# تشغيل خادم الويب في خلفية مستقلة
 threading.Thread(target=run_flask_server, daemon=True).start()
 
 # ==========================================
@@ -301,6 +300,10 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         keyboard = [
             [InlineKeyboardButton("➕ إضافة نقاط للطالب", callback_data="admin_add_points_prompt")],
+            [InlineKeyboardButton("📤 رفع محتوى جديد للأقسام", callback_data="admin_upload_content_prompt")],
+            [InlineKeyboardButton("📋 مراجعة حلول وواجبات الطلاب", callback_data="admin_view_submissions")],
+            [InlineKeyboardButton("🛡️ إدارة المشرفين والصلاحيات", callback_data="admin_manage_admins")],
+            [InlineKeyboardButton("📊 السجلات وأنشطة النظام", callback_data="admin_view_audit_logs")],
             [InlineKeyboardButton("⬅️ رجوع للرئيسية", callback_data="back_home")]
         ]
         await query.edit_message_text(text=f"👑 **غرفة القيادة العليا (مستوى السيادة: {role}):**", reply_markup=InlineKeyboardMarkup(keyboard))
@@ -311,6 +314,52 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         admin_state[user_id] = {"action": "wait_admin_add_points_id"}
         await query.message.reply_text("➕ **إضافة نقاط:**\nأرسل الآن **آيدي الطالب** المراد إضافة النقاط له:")
+
+    elif data == "admin_upload_content_prompt":
+        if not role:
+            await query.answer("مرفوض!", show_alert=True)
+            return
+        await query.message.reply_text("📤 **رفع محتوى:**\nميزة رفع المحتوى مفعلة. يرجى اختيار القسم المطلوب لاحقاً أو إرسال الملف مباشرة.")
+
+    elif data == "admin_view_submissions":
+        if not role:
+            await query.answer("مرفوض!", show_alert=True)
+            return
+        conn = sqlite3.connect("dark_cyber_academy.db")
+        cursor = conn.cursor()
+        cursor.execute("SELECT id, student_name, task_info, status FROM submissions WHERE status = 'قيد المراجعة السيبرانية'")
+        rows = cursor.fetchall()
+        conn.close()
+        
+        if not rows:
+            await query.message.reply_text("📭 لا توجد واجبات أو مهام قيد المراجعة حالياً.")
+            return
+        
+        text = "📋 **المهام والواجبات المرسلة:**\n\n"
+        for r in rows:
+            text += f"🆔 رقم الطلب: `{r[0]}`\n👤 الطالب: {r[1]}\n📝 التفاصيل: {r[2]}\nStatus: {r[3]}\n------------------\n"
+        await query.message.reply_text(text, parse_mode="Markdown")
+
+    elif data == "admin_manage_admins":
+        if role != "dark_lord":
+            await query.answer("مرفوض! هذه الصلاحية لمالك النظام فقط.", show_alert=True)
+            return
+        await query.message.reply_text("🛡️ **إدارة المشرفين:**\nيمكنك تعيين مشرف جديد عبر الآيدي أو إزالته.")
+
+    elif data == "admin_view_audit_logs":
+        if not role:
+            await query.answer("مرفوض!", show_alert=True)
+            return
+        conn = sqlite3.connect("dark_cyber_academy.db")
+        cursor = conn.cursor()
+        cursor.execute("SELECT admin_id, action_desc, timestamp FROM audit_logs ORDER BY id DESC LIMIT 10")
+        rows = cursor.fetchall()
+        conn.close()
+        
+        text = "📊 **آخر سجلات العمليات والإدارة:**\n\n"
+        for r in rows:
+            text += f"👤 المشرف: `{r[0]}`\n⚙️ الإجراء: {r[1]}\n⏱️ الوقت: {r[2]}\n------------------\n"
+        await query.message.reply_text(text, parse_mode="Markdown")
 
 async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
