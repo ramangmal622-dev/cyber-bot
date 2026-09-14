@@ -33,7 +33,6 @@ def init_db():
         )
     ''')
     
-    # جدول صلاحيات الأدمن الفرعي لكل تخصص ومستوى
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS admin_permissions (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -163,7 +162,7 @@ def send_welcome(message):
     bot.send_message(message.chat.id, f"مرحباً بك يا {fullname} في البوت الأكاديمي الشامل 🎓\nاختر من الأزرار بالأسفل للبدء:", reply_markup=markup)
 
 
-# ==================== الأقسام الأكاديمية للطلاب ====================
+# ==================== تصفح الأقسام والملفات للطلاب ====================
 
 @bot.message_handler(func=lambda msg: msg.text == "📂 تصفح الأقسام والملازم")
 def show_student_faculties(message):
@@ -215,9 +214,39 @@ def show_level_content_and_controls(call):
     )
     bot.edit_message_text(f"🎓 **تخصص {fac_title} - المستوى {level_num}**\nاختر الإجراء المطلوب:", call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode="Markdown")
 
-@bot.callback_query_handler(func=lambda call: call.data.startswith("getfiles_") or call.data.startswith("schedule_") or call.data.startswith("group_"))
+# عرض الملفات المخزنة للطلاب
+@bot.callback_query_handler(func=lambda call: call.data.startswith("getfiles_"))
+def student_get_files(call):
+    _, prefix, level_num = call.data.split("_")
+    category = f"{prefix}_{level_num}"
+    
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute("SELECT file_id_tg, file_name, file_type FROM files WHERE category = ?", (category,))
+    files = cursor.fetchall()
+    conn.close()
+    
+    if not files:
+        bot.answer_callback_query(call.id, "📭 لا توجد ملفات مرفوعة في هذا المستوى حتى الآن.", show_alert=True)
+        return
+    
+    bot.answer_callback_query(call.id, "📂 جاري إرسال ملفات هذا المستوى...")
+    for f in files:
+        file_tg, f_name, f_type = f[0], f[1], f[2]
+        caption = f"📄 {f_name or 'ملف أكاديمي'}"
+        try:
+            if f_type == 'document':
+                bot.send_document(call.message.chat.id, file_tg, caption=caption)
+            elif f_type == 'photo':
+                bot.send_photo(call.message.chat.id, file_tg, caption=caption)
+            else:
+                bot.send_message(call.message.chat.id, f"ملف: {file_tg}")
+        except Exception:
+            pass
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith("schedule_") or call.data.startswith("group_"))
 def handle_level_actions(call):
-    bot.answer_callback_query(call.id, "تم استلام الطلب. جاري عرض محتويات هذا القسم للمستوى المحدد.", show_alert=True)
+    bot.answer_callback_query(call.id, "تم استلام الطلب. هذه الخدمة ستتوفر قريباً.", show_alert=True)
 
 @bot.callback_query_handler(func=lambda call: call.data == "back_to_faculties")
 def back_to_faculties_handler(call):
@@ -268,7 +297,7 @@ def contact_support(message):
     bot.reply_to(message, "💬 لأي استفسار أو مشكلة تقنية تواجهك داخل البوت، يرجى التواصل مع إدارة البوت أو مشرف القسم.")
 
 
-# ==================== لوحة تحكم الأدمن المرتبة حسب الأقسام والمستويات ====================
+# ==================== لوحة تحكم الأدمن ونظام رفع الملفات ====================
 
 @bot.message_handler(func=lambda msg: msg.text == "👑 لوحة تحكم الأدمن الشاملة")
 def admin_main_panel(message):
@@ -288,7 +317,7 @@ def admin_main_panel(message):
     bot.send_message(message.chat.id, "👑 **لوحة التحكم الإدارية المركزية المقسمة حسب التخصصات:**\nاختر القسم المطلوب لإدارة مستوياته وأزّراره الخاصة:", reply_markup=markup, parse_mode="Markdown")
 
 
-@bot.callback_query_handler(func=lambda call: call.data.startswith("adm_fac_") or call.data.startswith("adm_lvl_") or call.data == "adm_general_mgmt" or call.data == "adm_sec_system" or call.data == "adm_back_main" or call.data == "adm_toggle_maint" or call.data == "adm_statistics")
+@bot.callback_query_handler(func=lambda call: call.data.startswith("adm_fac_") or call.data.startswith("adm_lvl_") or call.data.startswith("up_lvl_") or call.data.startswith("del_lvl_") or call.data == "adm_general_mgmt" or call.data == "adm_sec_system" or call.data == "adm_back_main" or call.data == "adm_toggle_maint")
 def admin_sections_router(call):
     user_id = call.from_user.id
     if not is_admin(user_id):
@@ -303,7 +332,7 @@ def admin_sections_router(call):
         conn.close()
         return
 
-    # مستويات الأمن السيبراني (أول، ثانٍ، ثالث، رابع)
+    # التوجه لقسم الأمن السيبراني
     if call.data == "adm_fac_cyber":
         markup = types.InlineKeyboardMarkup(row_width=1)
         markup.add(
@@ -337,6 +366,7 @@ def admin_sections_router(call):
         )
         bot.edit_message_text("🏛️ **إدارة قسم الهندسة المعمارية:**\nاختر المستوى المطلوب لإدارته وتحكم بمحتوياته:", call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode="Markdown")
 
+    # التحكم بمستوى محدد داخل التخصص
     elif call.data.startswith("adm_lvl_"):
         parts = call.data.split("_")
         prefix = parts[2] 
@@ -352,10 +382,23 @@ def admin_sections_router(call):
         markup = types.InlineKeyboardMarkup(row_width=1)
         markup.add(
             types.InlineKeyboardButton("➕ رفع ملف جديد لهذا المستوى", callback_data=f"up_lvl_{sec_key}"),
-            types.InlineKeyboardButton("🗑️ حذف ملف من هذا المستوى", callback_data=f"del_lvl_{sec_key}"),
+            types.InlineKeyboardButton("🗑️ حذف ملفات هذا المستوى", callback_data=f"del_lvl_{sec_key}"),
             types.InlineKeyboardButton(f"🔙 رجوع لقسم {fac_names.get(prefix)}", callback_data=f"adm_fac_{prefix}")
         )
         bot.edit_message_text(f"⚙️ **لوحة تحكم مشرف: {fac_names.get(prefix)} - المستوى {lvl}**\nاختر العملية الإدارية المطلوبة:", call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode="Markdown")
+
+    # بدء عملية رفع الملف (طلب إرسال الملف من الأدمن)
+    elif call.data.startswith("up_lvl_"):
+        sec_key = call.data.replace("up_lvl_", "")
+        bot.answer_callback_query(call.id)
+        msg = bot.send_message(call.message.chat.id, "📥 أرسل الآن الملف (مستند PDF، صورة، أو ملف ملزمة) ليتم حفظه في هذا القسم مباشرة:")
+        bot.register_next_step_handler(msg, save_uploaded_file_to_db, sec_key)
+
+    elif call.data.startswith("del_lvl_"):
+        sec_key = call.data.replace("del_lvl_", "")
+        cursor.execute("DELETE FROM files WHERE category = ?", (sec_key,))
+        conn.commit()
+        bot.answer_callback_query(call.id, "🗑️ تم حذف جميع ملفات هذا المستوى بنجاح!", show_alert=True)
 
     elif call.data == "adm_general_mgmt":
         if not is_owner(user_id):
@@ -403,6 +446,36 @@ def admin_sections_router(call):
 
     conn.close()
 
+# دالة حفظ الملف المرفوع في قاعدة البيانات
+def save_uploaded_file_to_db(message, category):
+    if not is_admin(message.from_user.id):
+        return
+    
+    file_id_tg = None
+    file_type = None
+    file_name = "ملف أكاديمي"
+    
+    if message.document:
+        file_id_tg = message.document.file_id
+        file_type = "document"
+        file_name = message.document.file_name or "مستند"
+    elif message.photo:
+        file_id_tg = message.photo[-1].file_id
+        file_type = "photo"
+        file_name = "صورة توضيحية"
+    else:
+        bot.reply_to(message, "⚠️ يرجى إرسال ملف (مستند PDF أو صورة) صالح.")
+        return
+        
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute("INSERT INTO files (category, instructor, file_id_tg, file_type, file_name) VALUES (?, ?, ?, ?, ?)",
+                   (category, "عام", file_id_tg, file_type, file_name))
+    conn.commit()
+    conn.close()
+    
+    bot.reply_to(message, "✅ **تم رفع وحفظ الملف بنجاح في هذا القسم!** يمكن للطلاب الآن تصفحه وتحميله.")
+
 def admin_main_panel_edit(call):
     markup = types.InlineKeyboardMarkup(row_width=1)
     markup.add(
@@ -415,7 +488,7 @@ def admin_main_panel_edit(call):
     bot.edit_message_text("👑 **لوحة التحكم الإدارية المركزية المقسمة حسب التخصصات:**\nاختر القسم المطلوب لإدارة مستوياته وأزّراره الخاصة:", call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode="Markdown")
 
 
-# ==================== نظام الإذاعة والرفع ====================
+# ==================== نظام الإذاعة والرفع العام ====================
 
 @bot.callback_query_handler(func=lambda call: call.data == "adm_broadcast_start")
 def broadcast_prompt(call):
