@@ -20,7 +20,7 @@ class SimpleHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
         self.end_headers()
-        self.wfile.write(b"Cyber-Ops Empire Bot v5.0 is active and running!")
+        self.wfile.write(b"Cyber-Ops Empire Bot v5.1 is active and running!")
 
 def run_web_server():
     port = int(os.environ.get("PORT", 8080))
@@ -54,7 +54,7 @@ def init_db():
         )
     """)
     
-    # جدول الطلاب
+    # جدول الطلاب (رصيد النقاط الافتتاحي DEFAULT 0)
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS students (
             student_id TEXT PRIMARY KEY,
@@ -257,7 +257,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not student_row and not role:
         admin_state[user_id] = {"action": "wait_self_registration_name"}
         await update.message.reply_text(
-            "🥷 **مرحباً بك في أكاديمية الأمن السيبراني (Cyber-Ops Empire v5.0)**\n\n"
+            "🥷 **مرحباً بك في أكاديمية الأمن السيبراني (Cyber-Ops Empire v5.1)**\n\n"
             "أنت تسجل لأول مرة في النظام. يرجى كتابة **اسمك الثلاثي** لحفظه في قاعدة البيانات وتوليد الآيدي الخاص بك:"
         )
         return
@@ -461,6 +461,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         keyboard = [
             [InlineKeyboardButton("➕ إضافة قسم أساسي جديد", callback_data="admin_add_main_section")],
             [InlineKeyboardButton("✏️ تعديل وإعادة تسمية الأقسام الرئيسية", callback_data="admin_rename_main_section")],
+            [InlineKeyboardButton("🗑️ حذف قسم رئيسي بالكامل مع محتوياته", callback_data="admin_delete_main_section")],
             [InlineKeyboardButton("➕ إضافة فرع/قسم جديد داخل الأقسام", callback_data="admin_add_sub_section")],
             [InlineKeyboardButton("✏️ تعديل وإعادة تسمية الأقسام والفروع", callback_data="admin_rename_sub_section")],
             [InlineKeyboardButton("📢 البث الإذاعي الشامل لجميع الرعية", callback_data="admin_broadcast_prompt")],
@@ -518,6 +519,35 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         mk = data.replace("renmain_base_", "")
         admin_state[user_id] = {"action": "wait_rename_main_section", "main_key": mk}
         await query.message.reply_text("✏️ أرسل الاسم الجديد لهذا القسم الرئيسي:")
+
+    elif data == "admin_delete_main_section":
+        if role != "dark_lord":
+            await query.answer("مرفوض! حذف قسم رئيسي بالكامل مقتصر على المالك حصرياً.", show_alert=True)
+            return
+        main_secs = get_all_main_sections()
+        keyboard = [[InlineKeyboardButton(f"🗑️ حذف: {name}", callback_data=f"delmain_base_{k}")] for k, name in main_secs.items()]
+        keyboard.append([InlineKeyboardButton("⬅️ رجوع لوحة القيادة", callback_data="admin_main")])
+        await query.edit_message_text(text="⚠️ **اختر القسم الرئيسي الذي تريد حذفه نهائياً (سيتم حذف الفروع والملفات التابعة له بالكامل):**", reply_markup=InlineKeyboardMarkup(keyboard))
+
+    elif data.startswith("delmain_base_"):
+        if role != "dark_lord":
+            return
+        mk = data.replace("delmain_base_", "")
+        
+        conn = sqlite3.connect("dark_cyber_academy.db")
+        cursor = conn.cursor()
+        # حذف القسم الرئيسي المخصص إذا وجد
+        cursor.execute("DELETE FROM custom_main_sections WHERE main_key = ?", (mk,))
+        # حذف الفروع التابعة له
+        cursor.execute("DELETE FROM custom_sub_sections WHERE main_type = ?", (mk,))
+        # حذف الملفات المرتبطة به
+        cursor.execute("DELETE FROM content WHERE main_type = ?", (mk,))
+        conn.commit()
+        conn.close()
+        
+        log_admin_action(user_id, f"حذف القسم الرئيسي بالكامل: {mk}")
+        keyboard = [[InlineKeyboardButton("⬅️ رجوع لوحة القيادة", callback_data="admin_main")]]
+        await query.edit_message_text(text=f"✅ **تم حذف القسم الرئيسي (`{mk}`) وجميع فروعه وملفاته بنجاح من النظام!**", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
 
     elif data == "admin_add_sub_section":
         if not role:
@@ -999,14 +1029,14 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         cursor = conn.cursor()
         try:
             cursor.execute("INSERT INTO students (student_id, user_id, name, points) VALUES (?, ?, ?, ?)", 
-                           (student_id, user_id, name, 10))
+                           (student_id, user_id, name, 0))
             conn.commit()
             del admin_state[user_id]
             await update.message.reply_text(
                 f"✅ **تم تسجيلك بنجاح في سجلات الأكاديمية!**\n\n"
                 f"👤 الاسم: `{name}`\n"
                 f"🆔 الآيدي الخاص بك: `{student_id}`\n"
-                f"⭐ رصيد البداية: `10` نقاط\n\n"
+                f"⭐ رصيد البداية: `0` نقاط\n\n"
                 f"احتفظ بالآيدي الخاص بك جيداً للاستعلام ولتسليم المهام."
             )
         except Exception as e:
@@ -1077,7 +1107,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"🔍 **نتيجة التحليل الأمني للرابط:**\n`{link}`\n\n"
             f"• التقييم: {safe_status}\n"
             f"• تحليل الأمان: تم فحص التوقيع الرقمي والتهديدات المرتبطة.\n"
-            f"• نظام الحماية: Safe-Guard v5.0"
+            f"• نظام الحماية: Safe-Guard v5.1"
         )
 
     elif action == "wait_support_message":
@@ -1316,7 +1346,7 @@ def main():
     app.add_handler(CallbackQueryHandler(button_handler))
     app.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, handle_message))
     
-    print("🤖 Bot v5.0 is running with all requested features...")
+    print("🤖 Bot v5.1 is running with full section deletion capability...")
     app.run_polling()
 
 if __name__ == "__main__":
