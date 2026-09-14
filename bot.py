@@ -39,6 +39,10 @@ logger = logging.getLogger(__name__)
 OWNER_ID = 8083038345
 BOT_TOKEN = "8969629386:AAFbTJaSmJ-9ADKjSLazu4LXfvxFyExd35o"
 
+# رابط الـ Webhook الخاص بك على Railway
+WEBHOOK_URL = "https://Cyber-bot-production-e452.up.railway.app"
+PORT = int(os.environ.get("PORT", 8080))
+
 def init_db():
     conn = sqlite3.connect("dark_cyber_academy.db")
     cursor = conn.cursor()
@@ -490,7 +494,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 text += f"👤 المشرف: `{l[0]}`\n⚡ الفعل: {l[1]}\n⏱️ الوقت: {l[2]}\n-------------------\n"
         await query.message.reply_text(text)
 
-# معالج الرسائل النصية ومدخلات الإدارة والطلاب (هنا تم حل مشكلة الحفظ وعدم التوقف)
 async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     text = update.message.text
@@ -504,7 +507,6 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     state = admin_state[user_id]
     action = state.get("action")
 
-    # 1. التسجيل الذاتي للطالب الجديد
     if action == "wait_self_registration_name":
         student_id = generate_unique_student_id()
         conn = sqlite3.connect("dark_cyber_academy.db")
@@ -530,7 +532,6 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         finally:
             conn.close()
 
-    # 2. إضافة نقاط للطالب من قبل المشرف (الخطوة الأولى: استقبال الآيدي)
     elif action == "wait_admin_add_points_id":
         conn = sqlite3.connect("dark_cyber_academy.db")
         cursor = conn.cursor()
@@ -545,7 +546,6 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         admin_state[user_id] = {"action": "wait_admin_add_points_value", "target_student_id": st[0]}
         await update.message.reply_text(f"✅ تم العثور على الطالب: **{st[1]}** (الرصيد الحالي: {st[2]})\n\nأرسل الآن **عدد النقاط** المراد إضافتها (رقم صحيح):")
 
-    # 3. إضافة نقاط للطالب من قبل المشرف (الخطوة الثانية: استقبال القيمة وحفظها بقاعدة البيانات)
     elif action == "wait_admin_add_points_value":
         target_sid = state.get("target_student_id")
         try:
@@ -563,13 +563,13 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             current_pts, st_name = st
             new_pts = current_pts + points_to_add
             cursor.execute("UPDATE students SET points = ? WHERE student_id = ?", (new_pts, target_sid))
-            conn.commit()  # <-- الحفظ الإجباري لضمان ثبات النقاط
+            conn.commit()  # الحفظ الإجباري لثبات النقاط
             
             log_admin_action(user_id, f"إضافة {points_to_add} نقطة للطالب {st_name} ({target_sid})")
             del admin_state[user_id]
             
             await update.message.reply_text(
-                f"✅ **تمت إضافة النقاط بنجاح وثزبت في النظام!**\n\n"
+                f"✅ **تمت إضافة النقاط بنجاح وثبتت في النظام!**\n\n"
                 f"👤 الطالب: {st_name}\n"
                 f"➕ النقاط المضافة: +{points_to_add}\n"
                 f"⭐ الرصيد الجديد: `{new_pts}` نقطة"
@@ -587,8 +587,14 @@ def main():
     app.add_handler(CallbackQueryHandler(button_handler))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message_handler))
     
-    print("Bot is running...")
-    app.run_polling()
+    print("Bot is running via Webhook...")
+    
+    # تشغيل البوت بنظام الـ Webhook بدلاً من run_polling لمنع توقف الحاوية
+    app.run_webhook(
+        listen="0.0.0.0",
+        port=PORT,
+        webhook_url=f"{WEBHOOK_URL}/{BOT_TOKEN}"
+    )
 
 if __name__ == "__main__":
     main()
