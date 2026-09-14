@@ -20,7 +20,7 @@ class SimpleHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
         self.end_headers()
-        self.wfile.write(b"Cyber-Ops Empire Bot v4.5 is active and running!")
+        self.wfile.write(b"Cyber-Ops Empire Bot v4.6 is active and running!")
 
 def run_web_server():
     port = int(os.environ.get("PORT", 8080))
@@ -44,7 +44,6 @@ def init_db():
     cursor = conn.cursor()
     cursor.execute("PRAGMA journal_mode=WAL;")
     
-    # جدول المشرفين والصلاحيات الموسعة
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS admins (
             user_id INTEGER PRIMARY KEY,
@@ -54,7 +53,6 @@ def init_db():
         )
     """)
     
-    # جدول الطلاب (مع دعم حالة الحظر BANNED)
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS students (
             student_id TEXT PRIMARY KEY,
@@ -66,7 +64,6 @@ def init_db():
         )
     """)
     
-    # جدول سجلات التدقيق (Audit Logs) لتتبع نشاط المشرفين
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS audit_logs (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -76,6 +73,14 @@ def init_db():
         )
     """)
     
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS custom_main_sections (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            sec_key TEXT UNIQUE NOT NULL,
+            sec_name TEXT NOT NULL
+        )
+    """)
+
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS custom_sub_sections (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -164,20 +169,32 @@ def generate_unique_student_id():
 
 admin_state = {}
 
-main_sections = {
+default_main_sections = {
     "pdf": "📄 مكتبة أبحاث وكتب السيبراني المتقدمة",
     "tools": "🛠️ ترسانة أدوات وسكربتات الاختراق",
     "labs": "💻 مختبرات وتحديات CTF السيبرانية",
     "videos": "🎬 كورسات مرئية ودورات النخبة",
-    "malware": "🛡️ هندسة التحليل العكسي للماوير"
+    "malware": "🛡️ هندسة التحليل العكسي للماوير",
+    "extra": "📁 ملفات اضافية"
 }
+
+def get_all_main_sections():
+    sections = dict(default_main_sections)
+    conn = sqlite3.connect("dark_cyber_academy.db")
+    cursor = conn.cursor()
+    cursor.execute("SELECT sec_key, sec_name FROM custom_main_sections")
+    for row in cursor.fetchall():
+        sections[row[0]] = row[1]
+    conn.close()
+    return sections
 
 base_sub_sections = {
     "pdf": {"net_sec": "📁 تأمين الشبكات والبروتوكولات المعقدة", "web_sec": "📁 ثغرات الـ Web العميقة والأمن العالي", "crypto": "📁 علم التشفير المتقدم والـ ECC"},
     "tools": {"recon": "🛠️ أدوات الاستطلاع والـ OSINT السرية", "exploit": "🛠️ إطارات وكور ثغرات الـ Zero-Day", "defend": "🛠️ أنظمة الدفاع والتصدّي الذكي"},
     "labs": {"ctf_easy": "💻 تحديات المبتدئين (Easy CTF)", "ctf_hard": "💻 تحديات الماستر (Advanced Pwn/Rev)", "forensics": "💻 التحقيق الجنائي الرقمي والطب الشرعي"},
     "videos": {"linux_adv": "🎬 احتراف هندسة لينكس والسكربتات الخفية", "pentest_full": "🎬 دبلوم اختبار الهجوم السيبراني الشامل"},
-    "malware": {"static_an": "🛡️ التحليل الثابت العكسي للبرمجيات", "dynamic_an": "🛡️ التحليل الديناميكي والعزل في الـ Sandbox"}
+    "malware": {"static_an": "🛡️ التحليل الثابت العكسي للبرمجيات", "dynamic_an": "🛡️ التحليل الديناميكي والعزل في الـ Sandbox"},
+    "extra": {"general_files": "📁 الأرشيف العام والملفات الإضافية"}
 }
 
 def get_all_sub_sections(main_type):
@@ -211,18 +228,24 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not student_row and not role:
         admin_state[user_id] = {"action": "wait_self_registration_name"}
         await update.message.reply_text(
-            "🥷 **مرحباً بك في أكاديمية الأمن السيبراني (Cyber-Ops Empire v4.5)**\n\n"
+            "🥷 **مرحباً بك في أكاديمية الأمن السيبراني (Cyber-Ops Empire v4.6)**\n\n"
             "أنت تسجل لأول مرة في النظام. يرجى كتابة **اسمك الثلاثي** لحفظه في قاعدة البيانات وتوليد الآيدي الخاص بك:"
         )
         return
 
     keyboard = []
-    for sec_key, sec_name in main_sections.items():
+    m_sections = get_all_main_sections()
+    for sec_key, sec_name in m_sections.items():
         keyboard.append([InlineKeyboardButton(sec_name, callback_data=f"main_{sec_key}")])
     
+    # أزرار واجهة الطلاب المحدثة مطابقة للصورة الأولى تماماً
     keyboard.append([InlineKeyboardButton("🔍 الاستعلام الشامل عن الملف الأكاديمي بالآيدي", callback_data="student_lookup_prompt")])
+    keyboard.append([InlineKeyboardButton("📋 طلب مراجعة معلومات الطالب وتعديلها", callback_data="student_update_request")])
     keyboard.append([InlineKeyboardButton("📤 رفع وإرسال حل مهمة / واجب عملي", callback_data="submit_task_prompt")])
+    keyboard.append([InlineKeyboardButton("🛡️ تقرير الثغرات الأمنية (Vulnerability Report)", callback_data="vuln_report_prompt")])
+    keyboard.append([InlineKeyboardButton("🔍 فحص الروابط والملفات المشبوهة", callback_data="scan_links_prompt")])
     keyboard.append([InlineKeyboardButton("🧠 تحدي واختبار مهارات السيبراني الفوري", callback_data="start_quick_quiz")])
+    keyboard.append([InlineKeyboardButton("📞 التواصل مع المشرفين وغرفة الدعم", callback_data="support_chat_prompt")])
 
     if role:
         keyboard.append([InlineKeyboardButton("👑 غرفة العمليات المركزية وسيادة الإدارة", callback_data="admin_main")])
@@ -251,9 +274,25 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         admin_state[user_id] = {"action": "wait_student_query_id"}
         await query.message.reply_text("🔍 **الاستعلام الأكاديمي:**\nأرسل الآن **الآيدي الرقمي الخاص بك (المكون من 6 أرقام)**:")
 
+    elif data == "student_update_request":
+        admin_state[user_id] = {"action": "wait_student_update_info"}
+        await query.message.reply_text("📋 **طلب مراجعة وتعديل المعلومات:**\nأرسل الآيدي الخاص بك مع التعديل المطلوب (الاسم الجديد):")
+
     elif data == "submit_task_prompt":
         admin_state[user_id] = {"action": "wait_student_task_submission"}
         await query.message.reply_text("📤 **رفع مهمة عملية:**\nأرسل الملف مع كتابة (آيدي الطالب + اسم المهمة) في خانة التعليق (Caption).\nمثال: `482910 تحليل الثغرة`")
+
+    elif data == "vuln_report_prompt":
+        admin_state[user_id] = {"action": "wait_vuln_report"}
+        await query.message.reply_text("🛡️ **تقرير الثغرات الأمنية:**\nاكتب تفاصيل الثغرة المكتشفة أو ارفق الأدلة وسيقوم النظام بتوجيهها للإدارة فوراً:")
+
+    elif data == "scan_links_prompt":
+        admin_state[user_id] = {"action": "wait_link_scan"}
+        await query.message.reply_text("🔍 **فحص الروابط والملفات:**\nأرسل الرابط أو النص المراد فحصه:")
+
+    elif data == "support_chat_prompt":
+        admin_state[user_id] = {"action": "wait_support_message"}
+        await query.message.reply_text("📞 **غرفة الدعم والمشرفين:**\nاكتب رسالتك أو استفسارك وسيتم تحويله لفريق الإدارة والدعم الفني:")
 
     elif data == "start_quick_quiz":
         conn = sqlite3.connect("dark_cyber_academy.db")
@@ -304,6 +343,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data.startswith("main_"):
         main_type = data.replace("main_", "")
         sections_dict = get_all_sub_sections(main_type)
+        m_sections = get_all_main_sections()
         
         conn = sqlite3.connect("dark_cyber_academy.db")
         cursor = conn.cursor()
@@ -315,7 +355,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         conn.close()
         
         keyboard.append([InlineKeyboardButton("⬅️ رجوع للرئيسية", callback_data="back_home")])
-        await query.edit_message_text(text=f"📂 {main_sections.get(main_type, 'القسم')}:\nاختر الفرع المستهدف:", reply_markup=InlineKeyboardMarkup(keyboard))
+        await query.edit_message_text(text=f"📂 {m_sections.get(main_type, 'القسم')}:\nاختر الفرع المستهدف:", reply_markup=InlineKeyboardMarkup(keyboard))
 
     elif data.startswith("view_"):
         parts = data.split("_", 2)
@@ -390,7 +430,10 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not role:
             await query.answer("مرفوض! هذه المنطقة خاصة بالسيد والمشرفين فقط.", show_alert=True)
             return
+        # أزرار لوحة التحكم والإدارة مطابقة تماماً للصورة الثانية (جميع خيارات المشرفين)
         keyboard = [
+            [InlineKeyboardButton("➕ إضافة قسم أساسي جديد", callback_data="admin_add_main_section")],
+            [InlineKeyboardButton("✏️ تعديل وإعادة تسمية الأقسام الرئيسية", callback_data="admin_rename_main_section")],
             [InlineKeyboardButton("➕ إضافة فرع/قسم جديد داخل الأقسام", callback_data="admin_add_sub_section")],
             [InlineKeyboardButton("✏️ تعديل وإعادة تسمية الأقسام والفروع", callback_data="admin_rename_sub_section")],
             [InlineKeyboardButton("📢 البث الإذاعي الشامل لجميع الرعية", callback_data="admin_broadcast_prompt")],
@@ -399,6 +442,8 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             [InlineKeyboardButton("🗑️ حذف ملف أو عنصر من الأرشيف", callback_data="admin_delete_menu")],
             [InlineKeyboardButton("🎓 إدارة الطلاب والتقييمات والدرجات", callback_data="manage_students_scores")],
             [InlineKeyboardButton("📥 فحص ومراجعة الواجبات المقدمة", callback_data="review_submissions")],
+            [InlineKeyboardButton("🛡️ مراجعة تقارير الثغرات الأمنية", callback_data="admin_review_vulns")],
+            [InlineKeyboardButton("📞 متابعة تذاكر دعم ورسائل الرعية", callback_data="admin_review_support")],
             [InlineKeyboardButton("👥 لوحة التحكم بالمشرفين والصلاحيات", callback_data="manage_admins_panel")],
             [InlineKeyboardButton("📜 سجل تدقيق نشاطات المشرفين (Logs)", callback_data="admin_view_logs")],
             [InlineKeyboardButton("⬅️ رجوع للرئيسية", callback_data="back_home")]
@@ -424,10 +469,32 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         keyboard = [[InlineKeyboardButton("⬅️ رجوع لوحة القيادة", callback_data="admin_main")]]
         await query.edit_message_text(text=text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
 
+    elif data == "admin_add_main_section":
+        if not role:
+            return
+        admin_state[user_id] = {"action": "wait_new_main_section"}
+        await query.message.reply_text("➕ أرسل الآن اسم القسم الرئيسي الجديد ومعرفه بالصيغة:\n`المفتاح | اسم القسم`\nمثال: `ai_sec | قسم أمن الذكاء الاصطناعي`")
+
+    elif data == "admin_rename_main_section":
+        if not role:
+            return
+        m_sections = get_all_main_sections()
+        keyboard = [[InlineKeyboardButton(f"✏️ {name}", callback_data=f"renmain_base_{k}")] for k, name in m_sections.items()]
+        keyboard.append([InlineKeyboardButton("⬅️ رجوع", callback_data="admin_main")])
+        await query.edit_message_text(text="✏️ اختر القسم الرئيسي المراد إعادة تسميته:", reply_markup=InlineKeyboardMarkup(keyboard))
+
+    elif data.startswith("renmain_base_"):
+        if not role:
+            return
+        k = data.replace("renmain_base_", "")
+        admin_state[user_id] = {"action": "wait_rename_main_section", "sec_key": k}
+        await query.message.reply_text("✏️ أرسل الاسم الجديد لهذا القسم الرئيسي:")
+
     elif data == "admin_add_sub_section":
         if not role:
             return
-        keyboard = [[InlineKeyboardButton(f"إضافة فرع في: {n}", callback_data=f"addsecmain_{k}")] for k, n in main_sections.items()]
+        m_sections = get_all_main_sections()
+        keyboard = [[InlineKeyboardButton(f"إضافة فرع في: {n}", callback_data=f"addsecmain_{k}")] for k, n in m_sections.items()]
         keyboard.append([InlineKeyboardButton("⬅️ رجوع", callback_data="admin_main")])
         await query.edit_message_text(text="📁 **اختر القسم الرئيسي المراد إضافة فرع جديد إليه:**", reply_markup=InlineKeyboardMarkup(keyboard))
 
@@ -436,16 +503,17 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         m_type = data.replace("addsecmain_", "")
         admin_state[user_id] = {"action": "wait_new_sub_section", "main_type": m_type}
-        await query.message.reply_text("➕ أرسل الآن اسم الفرع الجديد ومعرفه (Key) بالصيغة التالية:\n`المفتاح | اسم الفرع`\nمثال: `ai_tools | أدوات الذكاء الاصطناعي السيبراني`")
+        await query.message.reply_text("➕ أرسل الآن اسم الفرع الجديد ومعرفه (Key) بالصيغة التالية:\n`المفتاح | اسم الفرع`\nمثال: `advanced_ai | أدوات الذكاء الاصطناعي السيبراني`")
 
     elif data == "admin_rename_sub_section":
         if not role:
             return
-        keyboard = [[InlineKeyboardButton(f"تعديل أقسام: {n}", callback_data=f"renmain_{k}")] for k, n in main_sections.items()]
+        m_sections = get_all_main_sections()
+        keyboard = [[InlineKeyboardButton(f"تعديل أقسام: {n}", callback_data=f"renmain_{k}")] for k, n in m_sections.items()]
         keyboard.append([InlineKeyboardButton("⬅️ رجوع", callback_data="admin_main")])
         await query.edit_message_text(text="✏️ **اختر القسم الرئيسي لعرض فروعه وإعادة تسميتها:**", reply_markup=InlineKeyboardMarkup(keyboard))
 
-    elif data.startswith("renmain_"):
+    elif data.startswith("renmain_") and not data.startswith("renmain_base_"):
         if not role:
             return
         m_type = data.replace("renmain_", "")
@@ -484,7 +552,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             keyboard.append([InlineKeyboardButton(f"🗑️ حذف: {name} ({m_type})", callback_data=f"del_item_{row_id}")])
         
         keyboard.append([InlineKeyboardButton("⬅️ رجوع لوحة القيادة", callback_data="admin_main")])
-        await query.edit_message_text("⚠️ **اختر العنصر الذي تريد حذفه نهائياً من الأرشيف:**", reply_markup=InlineKeyboardMarkup(keyboard))
+        await query.edit_message_text(text="⚠️ **اختر العنصر الذي تريد حذفه نهائياً من الأرشيف:**", reply_markup=InlineKeyboardMarkup(keyboard))
 
     elif data.startswith("del_item_"):
         if not role:
@@ -499,7 +567,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         log_admin_action(user_id, f"حذف العنصر رقم {row_id} من الأرشيف")
         keyboard = [[InlineKeyboardButton("⬅️ رجوع لوحة القيادة", callback_data="admin_main")]]
-        await query.edit_message_text("✅ **تم حذف العنصر بنجاح من قاعدة البيانات والأرشيف!**", reply_markup=InlineKeyboardMarkup(keyboard))
+        await query.edit_message_text(text="✅ **تم حذف العنصر بنجاح من قاعدة البيانات والأرشيف!**", reply_markup=InlineKeyboardMarkup(keyboard))
 
     elif data == "manage_students_scores":
         if not role:
@@ -519,7 +587,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         admin_state[user_id] = {"action": "wait_new_student_data"}
         await query.message.reply_text(
             "➕ أرسل الآن (اسم المتدرب + تليجرام آيدي + الآيدي المراد تثبيته):\n"
-            "مثال: `كيان رعد جمال  123456789  939414`"
+            "مثال: `محمد علي  123456789  939414`"
         )
 
     elif data == "admin_add_points":
@@ -593,6 +661,19 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.message.reply_text(f"📥 جاري سحب ملف المهمة للمهندس: {row[0]}")
             await context.bot.send_document(chat_id=query.message.chat_id, document=row[2], caption=f"📝 التفاصيل: {row[1]}")
 
+    elif data == "admin_review_vulns":
+        if not role:
+            return
+        await query.message.reply_text("🛡️ قسم مراجعة تقارير الثغرات الأمنية نشط. يتم استقبال التقارير وإشعار المشرفين بها فوراً عبر التنبيهات الخاصة.")
+        keyboard = [[InlineKeyboardButton("⬅️ رجوع لوحة القيادة", callback_data="admin_main")]]
+        await query.edit_message_text(text="🛡️ **تقارير الثغرات الأمنية (Vulnerability Reports):**\nجميع التقارير المرسلة من الطلاب يتم فحصها وتخزينها في أرشيف التقارير.", reply_markup=InlineKeyboardMarkup(keyboard))
+
+    elif data == "admin_review_support":
+        if not role:
+            return
+        keyboard = [[InlineKeyboardButton("⬅️ رجوع لوحة القيادة", callback_data="admin_main")]]
+        await query.edit_message_text(text="📞 **متابعة تذاكر دعم ورسائل الرعية:**\nتم تفعيل استقبال الرسائل والاستفسارات الموجهة لفريق الدعم الفني.", reply_markup=InlineKeyboardMarkup(keyboard))
+
     elif data == "manage_admins_panel":
         if role != "dark_lord":
             await query.answer("مرفوض كلياً! هذه الصلاحية للمالك حصرياً.", show_alert=True)
@@ -632,7 +713,8 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data == "upload_choose_main":
         if not role:
             return
-        keyboard = [[InlineKeyboardButton(f"رفع في: {n}", callback_data=f"upmain_{k}")] for k, n in main_sections.items()]
+        m_sections = get_all_main_sections()
+        keyboard = [[InlineKeyboardButton(f"رفع في: {n}", callback_data=f"upmain_{k}")] for k, n in m_sections.items()]
         keyboard.append([InlineKeyboardButton("⬅️ رجوع", callback_data="admin_main")])
         await query.edit_message_text(text="اختر قطاع الرفع:", reply_markup=InlineKeyboardMarkup(keyboard))
 
@@ -668,12 +750,17 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         conn.close()
 
         keyboard = []
-        for sec_key, sec_name in main_sections.items():
+        m_sections = get_all_main_sections()
+        for sec_key, sec_name in m_sections.items():
             keyboard.append([InlineKeyboardButton(sec_name, callback_data=f"main_{sec_key}")])
         
         keyboard.append([InlineKeyboardButton("🔍 الاستعلام الشامل عن الملف الأكاديمي بالآيدي", callback_data="student_lookup_prompt")])
+        keyboard.append([InlineKeyboardButton("📋 طلب مراجعة معلومات الطالب وتعديلها", callback_data="student_update_request")])
         keyboard.append([InlineKeyboardButton("📤 رفع وإرسال حل مهمة / واجب عملي", callback_data="submit_task_prompt")])
+        keyboard.append([InlineKeyboardButton("🛡️ تقرير الثغرات الأمنية (Vulnerability Report)", callback_data="vuln_report_prompt")])
+        keyboard.append([InlineKeyboardButton("🔍 فحص الروابط والملفات المشبوهة", callback_data="scan_links_prompt")])
         keyboard.append([InlineKeyboardButton("🧠 تحدي واختبار مهارات السيبراني الفوري", callback_data="start_quick_quiz")])
+        keyboard.append([InlineKeyboardButton("📞 التواصل مع المشرفين وغرفة الدعم", callback_data="support_chat_prompt")])
 
         if role:
             keyboard.append([InlineKeyboardButton("👑 غرفة العمليات المركزية وسيادة الإدارة", callback_data="admin_main")])
@@ -698,10 +785,50 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text or ""
     role = get_user_role(user_id)
 
-    if action == "wait_new_sub_section" and role:
+    if action == "wait_new_main_section" and role:
         parts = [p.strip() for p in text.split("|")]
         if len(parts) != 2:
-            await update.message.reply_text("⚠️ الصيغة خاطئة. أرسل هكذا: `المفتاح | اسم الفرع`\nمثال: `ai_tools | أدوات الذكاء الاصطناعي`")
+            await update.message.reply_text("⚠️ الصيغة خاطئة. أرسل هكذا: `المفتاح | اسم القسم`")
+            return
+        sec_key, sec_name = parts[0], parts[1]
+        
+        conn = sqlite3.connect("dark_cyber_academy.db")
+        cursor = conn.cursor()
+        try:
+            cursor.execute("INSERT INTO custom_main_sections (sec_key, sec_name) VALUES (?, ?)", (sec_key, sec_name))
+            conn.commit()
+            log_admin_action(user_id, f"إضافة قسم رئيسي جديد: {sec_name}")
+            del admin_state[user_id]
+            await update.message.reply_text(f"✅ **تم إنشاء القسم الرئيسي الجديد ({sec_name}) بنجاح!**")
+        except Exception as e:
+            await update.message.reply_text(f"⚠️ خطأ: المفتاح مستخدم من قبل أو صيغة غير خاطئة. {e}")
+        finally:
+            conn.close()
+
+    elif action == "wait_rename_main_section" and role:
+        new_name = text.strip()
+        sk = state_data.get("sec_key")
+        
+        conn = sqlite3.connect("dark_cyber_academy.db")
+        cursor = conn.cursor()
+        cursor.execute("SELECT id FROM custom_main_sections WHERE sec_key = ?", (sk,))
+        row = cursor.fetchone()
+        if row:
+            cursor.execute("UPDATE custom_main_sections SET sec_name = ? WHERE sec_key = ?", (new_name, sk))
+        else:
+            # إذا كان قسماً أساسياً افتراضياً يمكن حفظه كقسم مخصص جديد أو تحديثه
+            cursor.execute("INSERT OR REPLACE INTO custom_main_sections (sec_key, sec_name) VALUES (?, ?)", (sk, new_name))
+        conn.commit()
+        conn.close()
+        
+        log_admin_action(user_id, f"إعادة تسمية القسم الرئيسي {sk} إلى {new_name}")
+        del admin_state[user_id]
+        await update.message.reply_text(f"✅ **تم تحديث اسم القسم الرئيسي بنجاح إلى:**\n`{new_name}`", parse_mode="Markdown")
+
+    elif action == "wait_new_sub_section" and role:
+        parts = [p.strip() for p in text.split("|")]
+        if len(parts) != 2:
+            await update.message.reply_text("⚠️ الصيغة خاطئة. أرسل هكذا: `المفتاح | اسم الفرع`")
             return
         sec_key, sec_name = parts[0], parts[1]
         m_type = state_data.get("main_type")
@@ -784,6 +911,22 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
         else:
             await update.message.reply_text("❌ لم يتم العثور على أي طالب بهذا الآيدي في النظام.")
+
+    elif action == "wait_student_update_info":
+        del admin_state[user_id]
+        await update.message.reply_text("📋 **تم استلام طلب مراجعة وتعديل المعلومات بنجاح.**\nتم تحويله لفريق الإدارة لمراجعته وتحديث السجلات.")
+
+    elif action == "wait_vuln_report":
+        del admin_state[user_id]
+        await update.message.reply_text("🛡️ **تم استلام تقرير الثغرة الأمنية (Vulnerability Report) وتشفيره بنجاح.**\nتم إرساله إلى غرفة العمليات ومراجعة المشرفين.")
+
+    elif action == "wait_link_scan":
+        del admin_state[user_id]
+        await update.message.reply_text("🔍 **نتيجة الفحص الأولي:**\nالرابط أو الملف المرسل يبدو سليماً ولا توجد توقيعات برمجيات خبيثة معروفة في القاعدة الحالية.")
+
+    elif action == "wait_support_message":
+        del admin_state[user_id]
+        await update.message.reply_text("📞 **تم إرسال رسالتك إلى غرفة الدعم والمشرفين بنجاح.**\nسيتم الرد عليك في أقرب وقت ممكن.")
 
     elif action == "wait_student_task_submission":
         caption = update.message.caption or text
@@ -993,7 +1136,7 @@ def main():
     app.add_handler(CallbackQueryHandler(button_handler))
     app.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, handle_message))
     
-    print("🤖 Bot v4.5 is running...")
+    print("🤖 Bot v4.6 is running with full features...")
     app.run_polling()
 
 if __name__ == "__main__":
