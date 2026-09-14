@@ -1,12 +1,19 @@
+import os
 import subprocess
 import sys
-import time
 
+# التحقق التلقائي وتثبيت المكتبات اللازمة
 try:
     import telebot
 except ImportError:
     subprocess.check_call([sys.executable, "-m", "pip", "install", "pyTelegramBotAPI"])
     import telebot
+
+try:
+    from flask import Flask, request
+except ImportError:
+    subprocess.check_call([sys.executable, "-m", "pip", "install", "flask"])
+    from flask import Flask, request
 
 import sqlite3
 from telebot import types
@@ -14,6 +21,9 @@ from telebot import types
 TOKEN = "8912899117:AAEm3AIIort2GI7G6fOC7nVvKOQSa9SAVaQ"
 bot = telebot.TeleBot(TOKEN)
 OWNER_ID = 8083038345  
+
+# إعداد تطبيق Flask لاستقبال الـ Webhook من Railway
+app = Flask(__name__)
 
 # ==================== قاعدة البيانات والجدولة (Database Setup) ====================
 def init_db():
@@ -770,20 +780,38 @@ def back_to_main(call):
     send_welcome(call.message)
 
 
-if __name__ == "__main__":
-    print("🚀 البوت يعمل الآن بكفاءة ومحمي ضد تداخل الجلسات...")
-    
-    # محاولة فرض إلغاء أي اتصال Webhook أو Polling قديم معلق في سيرفرات تيليجرام
-    try:
-        bot.remove_webhook()
-        time.sleep(1)
-    except Exception:
-        pass
+# ==================== إعدادات Webhook لـ Railway ====================
 
-    # حلقة التشغيل الآمنة (إذا حدث خطأ 409 أو انقطع الاتصال، ينتظر البوت 5 ثوانٍ ويعاود الاتصال تلقائياً)
-    while True:
-        try:
-            bot.infinity_polling(timeout=60, long_polling_timeout=60)
-        except Exception as e:
-            print(f"⚠️ تنبيه اتصال (سيتم إعادة المحاولة بعد 5 ثوانٍ): {e}")
-            time.sleep(5)
+@app.route(f'/{TOKEN}', methods=['POST'])
+def webhook():
+    if request.headers.get('content-type') == 'application/json':
+        json_string = request.get_data().decode('utf-8')
+        update = telebot.types.Update.de_json(json_string)
+        bot.process_new_updates([update])
+        return "!", 200
+    else:
+        return "Invalid Request", 403
+
+@app.route('/')
+def index():
+    return "Bot is running successfully via Webhook!", 200
+
+
+if __name__ == "__main__":
+    print("🚀 جاري تهيئة البوت وتفعيل نظام Webhook...")
+    
+    # الحصول على رابط الدومين الخاص بـ Railway تلقائياً إن وجد، أو استخدام وضع المحلي
+    RAILWAY_URL = os.environ.get("RAILWAY_STATIC_URL") or os.environ.get("RAILWAY_PUBLIC_DOMAIN")
+    
+    if RAILWAY_URL:
+        webhook_url = f"https://{RAILWAY_URL}/{TOKEN}"
+        bot.remove_webhook()
+        bot.set_webhook(url=webhook_url)
+        print(f"✅ تم ربط الـ Webhook بنجاح مع الرابط: {webhook_url}")
+    else:
+        print("⚠️ تنبيه: لم يتم اكتشاف متغير دومين Railway. يجدر التأكد من إعدادات النشر.")
+        bot.remove_webhook()
+
+    # تشغيل سيرفر Flask للاستماع لطلبات تيليجرام
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=port)
