@@ -50,7 +50,7 @@ def home():
         </head>
         <body>
             <div class="container">
-                <h1>🛡️ أكاديمية الأمن السيبراني (Cyber-Ops Empire v4.6) 🛡️</h1>
+                <h1>🛡️ أكاديمية الأمن السيبراني (Cyber-Ops Empire v4.7) 🛡️</h1>
                 <p>حالة السيرفر: <span class="status">● متصل ويعمل بكفاءة على Railway (Flask Webserver Active)</span></p>
                 <hr style="border: 0.5px solid #30363d; margin: 20px 0;">
                 <p>جميع حقوق إدارة وتأمين الأنظمة محفوظة للأكاديمية.</p>
@@ -261,7 +261,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not student_row and not role:
             admin_state[user_id] = {"action": "wait_self_registration_name"}
             await update.message.reply_text(
-                "🥷 **مرحباً بك في أكاديمية الأمن السيبراني (Cyber-Ops Empire v4.6)**\n\n"
+                "🥷 **مرحباً بك في أكاديمية الأمن السيبراني (Cyber-Ops Empire v4.7)**\n\n"
                 "أنت تسجل لأول مرة في النظام. يرجى كتابة **اسمك الثلاثي** لحفظه في قاعدة البيانات وتوليد الآيدي الخاص بك:"
             )
             return
@@ -310,7 +310,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await start(update, context)
             return
 
-        # معالجة الأقسام الرئيسية وعرض محتوياتها للطلاب
+        # عرض الأقسام ومحتوياتها وتكلفة النقاط
         if data.startswith("main_"):
             sec_key = data.replace("main_", "")
             m_sections = get_all_main_sections()
@@ -325,7 +325,8 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             keyboard = []
             if items:
                 for item in items:
-                    keyboard.append([InlineKeyboardButton(f"📁 {item[1]} (⭐ {item[2]})", callback_data=f"get_item_{item[0]}")])
+                    cost_text = f" (مجاناً)" if item[2] == 0 else f" (⭐ {item[2]} نقاط)"
+                    keyboard.append([InlineKeyboardButton(f"📁 {item[1]}{cost_text}", callback_data=f"get_item_{item[0]}")])
             else:
                 keyboard.append([InlineKeyboardButton("⚠️ لا توجد ملفات مرفوعة في هذا القسم حالياً", callback_data="noop")])
                 
@@ -338,30 +339,53 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             return
 
-        # معالجة تسليم الملفات عند ضغط الطالب عليه
+        # معالجة تنزيل الملف مع التحقق من النقاط وخصمها تلقائياً
         if data.startswith("get_item_"):
             item_id = data.replace("get_item_", "")
             conn = sqlite3.connect("dark_cyber_academy.db")
             cursor = conn.cursor()
             cursor.execute("SELECT item_name, file_id, file_type, points_cost FROM content WHERE id = ?", (item_id,))
             item = cursor.fetchone()
-            conn.close()
             
             if not item:
+                conn.close()
                 await query.answer("⚠️ الملف غير موجود أو تم حذفه من الأرشيف.", show_alert=True)
                 return
             
             item_name, file_id, file_type, points_cost = item
             
-            # إرسال الملف مباشرة للمستخدم حسب نوعه
+            # إذا لم يكن المستخدم مشرفاً، نتحقق من نقاط الطالب ونخصمها
+            if not role and points_cost > 0:
+                cursor.execute("SELECT student_id, points FROM students WHERE user_id = ?", (user_id,))
+                student = cursor.fetchone()
+                
+                if not student:
+                    conn.close()
+                    await query.answer("⚠️ يجب عليك التسجيل كطالب أولاً لاستخدام النقاط وتحميل الملفات. اضغط /start", show_alert=True)
+                    return
+                
+                student_id, current_points = student
+                if current_points < points_cost:
+                    conn.close()
+                    await query.answer(f"❌ رصيدك غير كافٍ! هذا الملف يتطلب {points_cost} نقطة، بينما رصيدك الحالي {current_points} نقطة.", show_alert=True)
+                    return
+                
+                # خصم النقاط من رصيد الطالب
+                new_points = current_points - points_cost
+                cursor.execute("UPDATE students SET points = ? WHERE user_id = ?", (new_points, user_id))
+                conn.commit()
+                
+            conn.close()
+            
+            # إرسال الملف للمستخدم
             if file_type == "document":
-                await context.bot.send_document(chat_id=user_id, document=file_id, caption=f"📁 {item_name}")
+                await context.bot.send_document(chat_id=user_id, document=file_id, caption=f"📁 {item_name}\n⭐ تم خصم التكلفة بنجاح.")
             elif file_type == "photo":
-                await context.bot.send_photo(chat_id=user_id, photo=file_id, caption=f"📁 {item_name}")
+                await context.bot.send_photo(chat_id=user_id, photo=file_id, caption=f"📁 {item_name}\n⭐ تم خصم التكلفة بنجاح.")
             elif file_type == "video":
-                await context.bot.send_video(chat_id=user_id, video=file_id, caption=f"📁 {item_name}")
+                await context.bot.send_video(chat_id=user_id, video=file_id, caption=f"📁 {item_name}\n⭐ تم خصم التكلفة بنجاح.")
             elif file_type == "audio":
-                await context.bot.send_audio(chat_id=user_id, audio=file_id, caption=f"📁 {item_name}")
+                await context.bot.send_audio(chat_id=user_id, audio=file_id, caption=f"📁 {item_name}\n⭐ تم خصم التكلفة بنجاح.")
             else:
                 await query.message.reply_text(f"📁 الملف: {item_name}")
             return
@@ -433,32 +457,50 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.message.reply_text("📞 أرسل رسالتك أو استفسارك وسيتم تحويله إلى غرفة العمليات والمشرفين فوراً:", parse_mode="Markdown")
             return
 
+        # حل الأسئلة وكسب النقاط
+        if data.startswith("quiz_"):
+            parts = data.split("_")
+            quiz_id = parts[1]
+            chosen_opt = int(parts[2])
+            
+            conn = sqlite3.connect("dark_cyber_academy.db")
+            cursor = conn.cursor()
+            cursor.execute("SELECT correct_opt, reward_points FROM quizzes WHERE id = ?", (quiz_id,))
+            q_data = cursor.fetchone()
+            
+            if not q_data:
+                conn.close()
+                await query.answer("⚠️ انتهت صلاحية هذا التحدي.", show_alert=True)
+                return
+            
+            correct_opt, reward_points = q_data
+            if chosen_opt == correct_opt:
+                cursor.execute("UPDATE students SET points = points + ? WHERE user_id = ?", (reward_points, user_id))
+                conn.commit()
+                conn.close()
+                await query.edit_message_text(
+                    text=f"🎉 **إجابة صحيحة!**\nتم إضافة `{reward_points}` نقاط إلى رصيدك السيبراني بنجاح.",
+                    parse_mode="Markdown",
+                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ رجوع للرئيسية", callback_data="back_home")]])
+                )
+            else:
+                conn.close()
+                await query.edit_message_text(
+                    text="❌ **إجابة خاطئة!**\nحاول مجدداً في تحديات أخرى لتعويض النقاط.",
+                    parse_mode="Markdown",
+                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ رجوع للرئيسية", callback_data="back_home")]])
+                )
+            return
+
         if data == "admin_main":
             if not role:
                 await query.answer("مرفوض! هذه المنطقة خاصة بالسيد والمشرفين فقط.", show_alert=True)
                 return
             
             keyboard = [
-                [InlineKeyboardButton("➕ إضافة قسم أساسي جديد", callback_data="admin_add_main_sec")],
-                [InlineKeyboardButton("✏️ تعديل وإعادة تسمية الأقسام الرئيسية", callback_data="admin_edit_main_sec")],
-                [InlineKeyboardButton("➕ إضافة فرع/قسم جديد داخل الأقسام", callback_data="admin_add_sub_sec")],
-                [InlineKeyboardButton("✏️ تعديل وإعادة تسمية الأقسام والفروع", callback_data="admin_edit_sub_sec")],
-                [InlineKeyboardButton("📢 البث الإذاعي الشامل لجميع الرعية", callback_data="admin_broadcast")],
-                [InlineKeyboardButton("🧠 زرع تحدي واختبار سيبراني (Quiz)", callback_data="admin_add_quiz")],
-                [InlineKeyboardButton("📤 رفع أداة أو ملف استخباراتي جديد", callback_data="admin_upload_file")],
-                [InlineKeyboardButton("🗑️ حذف ملف أو عنصر من الأرشيف", callback_data="admin_delete_file")],
-                [InlineKeyboardButton("🎓 إدارة الطلاب والتقييمات والدرجات", callback_data="admin_manage_students")],
+                [InlineKeyboardButton("📤 رفع ملف مع تحديد تكلفة النقاط", callback_data="admin_upload_file")],
                 [InlineKeyboardButton("⭐ إضافة / تعديل نقاط طالب", callback_data="admin_add_points_prompt")],
-                [InlineKeyboardButton("📬 فحص ومراجعة الواجبات المقدمة", callback_data="admin_view_submissions")],
-                [InlineKeyboardButton("🛡️ مراجعة تقارير الثغرات الأمنية", callback_data="admin_view_vulns")],
-                [InlineKeyboardButton("📞 متابعة تذاكر دعم ورسائل الرعية", callback_data="admin_support_tickets")],
-                [InlineKeyboardButton("👥 لوحة التحكم بالمشرفين والصلاحيات", callback_data="admin_manage_admins")],
-                [InlineKeyboardButton("📜 سجل تدقيق نشاطات المشرفين (Logs)", callback_data="admin_view_audit_logs")],
-                [InlineKeyboardButton("⛔ حظر طالب من النظام", callback_data="admin_ban_student")],
-                [InlineKeyboardButton("🟢 إلغاء حظر طالب", callback_data="admin_unban_student")],
-                [InlineKeyboardButton("💬 إرسال تنبيه فردي لطالب", callback_data="admin_send_private_msg")],
                 [InlineKeyboardButton("📊 عرض إحصائيات الأكاديمية", callback_data="admin_academy_stats")],
-                [InlineKeyboardButton("🧹 تصفير نقاط طالب", callback_data="admin_reset_points")],
                 [InlineKeyboardButton("⬅️ رجوع للرئيسية", callback_data="back_home")]
             ]
             
@@ -478,7 +520,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             keyboard.append([InlineKeyboardButton("⬅️ رجوع", callback_data="admin_main")])
             
             await query.edit_message_text(
-                text="📤 **رفع ملف أو أداة جديدة:**\nاختر القسم المراد رفع الملف إليه:",
+                text="📤 **رفع ملف جديد:**\nاختر القسم المراد رفع الملف إليه:",
                 parse_mode="Markdown",
                 reply_markup=InlineKeyboardMarkup(keyboard)
             )
@@ -488,10 +530,10 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if not role:
                 return
             sec_key = data.replace("upload_to_", "")
-            admin_state[user_id] = {"action": "wait_file_upload_data", "main_type": sec_key}
+            admin_state[user_id] = {"action": "wait_file_cost", "main_type": sec_key}
             await query.message.reply_text(
-                "📥 **خطوة أخيرة:**\n"
-                "قم بإرسال الملف (PDF، وثيقة، أداة، أو صورة) مع كتابة **اسم الملف** في تعليق (Caption) مع الملف، أو أرسل اسم الملف أولاً ثم ارفعه.",
+                "💰 **تحديد تكلفة النقاط:**\n"
+                "أرسل الآن **عدد النقاط المطلوب لتنزيل هذا الملف** (أرسل `0` إذا كان الملف مجانياً):",
                 parse_mode="Markdown"
             )
             return
@@ -526,9 +568,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"📁 إجمالي الملفات والمحتويات المرفوعة: `{content_count}`",
                 parse_mode="Markdown"
             )
-        else:
-            if role:
-                await query.message.reply_text(f"⚙️ تم الاستلام بنجاح. هذه الوظيفة قيد التفعيل الكامل.")
     except Exception as e:
         logger.error(f"Error in button_handler: {e}")
 
@@ -537,10 +576,7 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_id = update.effective_user.id
         
         if is_student_banned(user_id) or user_id not in admin_state:
-            if user_id in admin_state and admin_state[user_id].get("action") == "wait_file_upload_data":
-                pass
-            else:
-                return
+            return
 
         state = admin_state[user_id]
         action = state.get("action")
@@ -580,7 +616,7 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             try:
                 points_to_add = int(parts[1])
             except ValueError:
-                await update.number.reply_text("⚠️ مقدار النقاط يجب أن يكون رقماً صحيحاً.")
+                await update.message.reply_text("⚠️ مقدار النقاط يجب أن يكون رقماً صحيحاً.")
                 return
 
             conn = sqlite3.connect("dark_cyber_academy.db")
@@ -610,8 +646,20 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 parse_mode="Markdown"
             )
 
+        elif action == "wait_file_cost":
+            try:
+                cost = int(update.message.text.strip())
+            except ValueError:
+                await update.message.reply_text("⚠️ يرجى إرسال رقم صحيح يمثل تكلفة النقاط (مثال: 10 أو 0).")
+                return
+            
+            main_type = state.get("main_type")
+            admin_state[user_id] = {"action": "wait_file_upload_data", "main_type": main_type, "points_cost": cost}
+            await update.message.reply_text("📥 تم حفظ التكلفة. الآن **أرسل الملف أو المستند** مع كتابة اسمه في التعليق (Caption):")
+
         elif action == "wait_file_upload_data":
             main_type = state.get("main_type")
+            points_cost = state.get("points_cost", 0)
             file_id = None
             file_type = "document"
             item_name = update.message.caption or update.message.text or "ملف سيبراني"
@@ -631,7 +679,7 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 file_id = update.message.audio.file_id
                 file_type = "audio"
             else:
-                admin_state[user_id] = {"action": "wait_file_upload_file", "main_type": main_type, "item_name": update.message.text}
+                admin_state[user_id] = {"action": "wait_file_upload_file", "main_type": main_type, "points_cost": points_cost, "item_name": update.message.text}
                 await update.message.reply_text("📥 تم حفظ اسم الملف. الآن **أرسل الملف أو المستند** المرفق لتتم عملية الحفظ نهائياً:")
                 return
 
@@ -640,17 +688,18 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 cursor = conn.cursor()
                 cursor.execute(
                     "INSERT INTO content (main_type, sec_key, item_name, file_id, file_type, points_cost) VALUES (?, ?, ?, ?, ?, ?)",
-                    (main_type, "general", item_name, file_id, file_type, 0)
+                    (main_type, "general", item_name, file_id, file_type, points_cost)
                 )
                 conn.commit()
                 conn.close()
 
                 del admin_state[user_id]
-                log_admin_action(user_id, f"رفع ملف جديد '{item_name}' إلى قسم {main_type}")
-                await update.message.reply_text(f"✅ **تم رفع وتخزين الملف بنجاح في القسم المطلوب!**\n📁 اسم الملف: `{item_name}`", parse_mode="Markdown")
+                log_admin_action(user_id, f"رفع ملف جديد '{item_name}' بتكلفة {points_cost} نقطة")
+                await update.message.reply_text(f"✅ **تم رفع وتخزين الملف بنجاح!**\n📁 اسم الملف: `{item_name}`\n⭐ التكلفة: `{points_cost}` نقطة", parse_mode="Markdown")
 
         elif action == "wait_file_upload_file":
             main_type = state.get("main_type")
+            points_cost = state.get("points_cost", 0)
             item_name = state.get("item_name")
             file_id = None
             file_type = "document"
@@ -673,14 +722,14 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 cursor = conn.cursor()
                 cursor.execute(
                     "INSERT INTO content (main_type, sec_key, item_name, file_id, file_type, points_cost) VALUES (?, ?, ?, ?, ?, ?)",
-                    (main_type, "general", item_name, file_id, file_type, 0)
+                    (main_type, "general", item_name, file_id, file_type, points_cost)
                 )
                 conn.commit()
                 conn.close()
 
                 del admin_state[user_id]
-                log_admin_action(user_id, f"رفع ملف جديد '{item_name}' إلى قسم {main_type}")
-                await update.message.reply_text(f"✅ **تم رفع وتخزين الملف بنجاح في القسم المطلوب!**\n📁 اسم الملف: `{item_name}`", parse_mode="Markdown")
+                log_admin_action(user_id, f"رفع ملف جديد '{item_name}' بتكلفة {points_cost} نقطة")
+                await update.message.reply_text(f"✅ **تم رفع وتخزين الملف بنجاح!**\n📁 اسم الملف: `{item_name}`\n⭐ التكلفة: `{points_cost}` نقطة", parse_mode="Markdown")
             else:
                 await update.message.reply_text("⚠️ يرجى إرسال ملف صالح (مستند، صورة، فيديو، أو صوت).")
 
