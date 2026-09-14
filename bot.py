@@ -1,5 +1,14 @@
+import subprocess
+import sys
+
+# التثبيت التلقائي الإجباري للمكتبة قبل أي عملية استيراد
+try:
+    import telebot
+except ImportError:
+    subprocess.check_call([sys.executable, "-m", "pip", "install", "pyTelegramBotAPI"])
+    import telebot
+
 import sqlite3
-import telebot
 from telebot import types
 
 TOKEN = "YOUR_BOT_TOKEN_HERE"
@@ -25,7 +34,7 @@ def init_db():
         )
     ''')
     
-    # جدول الأقسام والمحتوى الدراسي (مرتبط بالأساتذة / المواد)
+    # جدول الأقسام والمحتوى الدراسي
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS files (
             file_id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -121,7 +130,6 @@ def send_welcome(message):
         conn.commit()
     conn.close()
 
-    # لوحة المفاتيح الرئيسية للطلاب والمستخدمين
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
     markup.add("📂 تصفح الأقسام والملازم", "👨‍🏫 قسم الأساتذة والمواد")
     markup.add("⭐ نقاطي ومعلوماتي", "📞 التواصل والدعم الفني")
@@ -207,7 +215,6 @@ def admin_main_panel(message):
     bot.send_message(message.chat.id, "👑 **لوحة التحكم الإدارية المركزية:**\nاختر القسم المطلوب للتنفيذ:", reply_markup=markup, parse_mode="Markdown")
 
 
-# معالجة أزرار الأدمن المتفرعة (Admin Sub-menus Callbacks)
 @bot.callback_query_handler(func=lambda call: call.data.startswith("adm_"))
 def admin_sub_callbacks(call):
     user_id = call.from_user.id
@@ -218,7 +225,6 @@ def admin_sub_callbacks(call):
     conn = get_db()
     cursor = conn.cursor()
 
-    # 1. فرع إدارة الملفات
     if call.data == "adm_sub_content":
         markup = types.InlineKeyboardMarkup(row_width=1)
         markup.add(
@@ -228,7 +234,6 @@ def admin_sub_callbacks(call):
         )
         bot.edit_message_text("📁 **قسم إدارة المحتوى والملفات:**\nاختر الإجراء المناسب:", call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode="Markdown")
 
-    # 2. فرع إدارة الطلاب والمستخدمين
     elif call.data == "adm_sub_users":
         markup = types.InlineKeyboardMarkup(row_width=2)
         markup.add(
@@ -240,12 +245,10 @@ def admin_sub_callbacks(call):
         )
         bot.edit_message_text("👥 **قسم إدارة الطلاب والمستخدمين:**\nتحكم بصلاحيات وحسابات المستخدمين:", call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode="Markdown")
 
-    # 3. البث الإذاعي
     elif call.data == "adm_broadcast_start":
         msg = bot.send_message(call.message.chat.id, "📢 أرسل الرسالة أو الوسائط التي تريد إذاعتها لجميع الطلاب الآن:")
         bot.register_next_step_handler(msg, process_global_broadcast)
 
-    # 4. سجلات النظام
     elif call.data == "adm_logs_view":
         cursor.execute("SELECT admin_id, action, timestamp FROM logs ORDER BY log_id DESC LIMIT 12")
         logs = cursor.fetchall()
@@ -257,7 +260,6 @@ def admin_sub_callbacks(call):
         markup.add(types.InlineKeyboardButton("🔙 رجوع", callback_data="adm_sub_content"))
         bot.edit_message_text(text, call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode="Markdown")
 
-    # 5. وضع الصيانة
     elif call.data == "adm_toggle_maint":
         cursor.execute("SELECT value FROM settings WHERE key='maintenance'")
         current = cursor.fetchone()[0]
@@ -267,7 +269,6 @@ def admin_sub_callbacks(call):
         log_action(user_id, f"تغيير وضع الصيانة إلى: {new_state}")
         bot.answer_callback_query(call.id, f"تم تغيير وضع الصيانة بنجاح ليصبح: {new_state.upper()}", show_alert=True)
 
-    # 6. إحصائيات البوت
     elif call.data == "adm_statistics":
         cursor.execute("SELECT COUNT(*) FROM users")
         total_u = cursor.fetchone()[0]
@@ -291,7 +292,6 @@ def admin_sub_callbacks(call):
 
     conn.close()
 
-# فرع تفاعلي لرفع الملفات (خطوات الإضافة)
 @bot.callback_query_handler(func=lambda call: call.data == "file_add_step")
 def ask_file_details(call):
     msg = bot.send_message(call.message.chat.id, "📤 أرسل الآن الملف (مستند، PDF، أو محاضرة) مع كتابة اسم القسم واسم الأستاذ في وصف الملف (Caption).")
@@ -318,7 +318,6 @@ def save_uploaded_file(message):
     log_action(message.from_user.id, f"رفع ملف جديد: {file_name}")
     bot.reply_to(message, f"✅ تم حفظ الملف وتصنيفه بنجاح تحت: [{caption}]")
 
-# معالجة البث الجماعي الآمن
 def process_global_broadcast(message):
     if not is_admin(message.from_user.id):
         return
@@ -342,14 +341,12 @@ def process_global_broadcast(message):
     bot.edit_message_text(f"✅ **تمت الإذاعة بنجاح!**\n- تم الإرسال إلى: `{success}` طالب\n- فشل لـ: `{failed}` مستخدم", 
                           message.chat.id, status_msg.message_id, parse_mode="Markdown")
 
-# العودة للقائمة الرئيسية عبر الكولباك
 @bot.callback_query_handler(func=lambda call: call.data == "main_menu_cb")
 def back_to_main(call):
     bot.delete_message(call.message.chat.id, call.message.message_id)
     send_welcome(call.message)
 
 
-# تشغيل البوت باستقرار تام
 if __name__ == "__main__":
     print("🚀 البوت المطور والشامل يعمل الآن بكفاءة واستقرار تام...")
     while True:
