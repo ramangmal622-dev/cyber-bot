@@ -171,29 +171,38 @@ def init_db():
 init_db()
 
 def log_admin_action(admin_id, desc):
-    conn = sqlite3.connect("dark_cyber_academy.db")
-    cursor = conn.cursor()
-    cursor.execute("INSERT INTO audit_logs (admin_id, action_desc) VALUES (?, ?)", (admin_id, desc))
-    conn.commit()
-    conn.close()
+    try:
+        conn = sqlite3.connect("dark_cyber_academy.db")
+        cursor = conn.cursor()
+        cursor.execute("INSERT INTO audit_logs (admin_id, action_desc) VALUES (?, ?)", (admin_id, desc))
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        logger.error(f"Error logging action: {e}")
 
 def get_user_role(user_id):
     if user_id == OWNER_ID:
         return "dark_lord"
-    conn = sqlite3.connect("dark_cyber_academy.db")
-    cursor = conn.cursor()
-    cursor.execute("SELECT role FROM admins WHERE user_id = ?", (user_id,))
-    row = cursor.fetchone()
-    conn.close()
-    return row[0] if row else None
+    try:
+        conn = sqlite3.connect("dark_cyber_academy.db")
+        cursor = conn.cursor()
+        cursor.execute("SELECT role FROM admins WHERE user_id = ?", (user_id,))
+        row = cursor.fetchone()
+        conn.close()
+        return row[0] if row else None
+    except Exception:
+        return None
 
 def is_student_banned(user_id):
-    conn = sqlite3.connect("dark_cyber_academy.db")
-    cursor = conn.cursor()
-    cursor.execute("SELECT status FROM students WHERE user_id = ?", (user_id,))
-    row = cursor.fetchone()
-    conn.close()
-    return row and row[0] == "BANNED"
+    try:
+        conn = sqlite3.connect("dark_cyber_academy.db")
+        cursor = conn.cursor()
+        cursor.execute("SELECT status FROM students WHERE user_id = ?", (user_id,))
+        row = cursor.fetchone()
+        conn.close()
+        return row and row[0] == "BANNED"
+    except Exception:
+        return False
 
 def generate_unique_student_id():
     conn = sqlite3.connect("dark_cyber_academy.db")
@@ -218,131 +227,126 @@ default_main_sections = {
 
 def get_all_main_sections():
     sections = dict(default_main_sections)
-    conn = sqlite3.connect("dark_cyber_academy.db")
-    cursor = conn.cursor()
-    cursor.execute("SELECT sec_key, sec_name FROM custom_main_sections")
-    for row in cursor.fetchall():
-        sections[row[0]] = row[1]
-    conn.close()
+    try:
+        conn = sqlite3.connect("dark_cyber_academy.db")
+        cursor = conn.cursor()
+        cursor.execute("SELECT sec_key, sec_name FROM custom_main_sections")
+        for row in cursor.fetchall():
+            sections[row[0]] = row[1]
+        conn.close()
+    except Exception:
+        pass
     return sections
 
 # ==========================================
 # 3. معالجة أوامر وأزرار البوت
 # ==========================================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    if is_student_banned(user_id):
-        await update.message.reply_text("⛔ **حسابك محظور من استخدام النظام السيبراني.**")
-        return
+    try:
+        user_id = update.effective_user.id
+        if is_student_banned(user_id):
+            await update.message.reply_text("⛔ **حسابك محظور من استخدام النظام السيبراني.**")
+            return
 
-    if user_id in admin_state:
-        del admin_state[user_id]
-        
-    role = get_user_role(user_id)
-    conn = sqlite3.connect("dark_cyber_academy.db")
-    cursor = conn.cursor()
-    cursor.execute("SELECT student_id, name, points FROM students WHERE user_id = ?", (user_id,))
-    student_row = cursor.fetchone()
-    conn.close()
-
-    if not student_row and not role:
-        admin_state[user_id] = {"action": "wait_self_registration_name"}
-        await update.message.reply_text(
-            "🥷 **مرحباً بك في أكاديمية الأمن السيبراني (Cyber-Ops Empire v4.6)**\n\n"
-            "أنت تسجل لأول مرة في النظام. يرجى كتابة **اسمك الثلاثي** لحفظه في قاعدة البيانات وتوليد الآيدي الخاص بك:"
-        )
-        return
-
-    keyboard = []
-    m_sections = get_all_main_sections()
-    for sec_key, sec_name in m_sections.items():
-        keyboard.append([InlineKeyboardButton(sec_name, callback_data=f"main_{sec_key}")])
-    
-    keyboard.append([InlineKeyboardButton("🔍 الاستعلام الشامل عن الملف الأكاديمي بالآيدي", callback_data="student_lookup_prompt")])
-    keyboard.append([InlineKeyboardButton("📋 طلب مراجعة معلومات الطالب وتعديلها", callback_data="student_update_request")])
-    keyboard.append([InlineKeyboardButton("📤 رفع وإرسال حل مهمة / واجب عملي", callback_data="submit_task_prompt")])
-    keyboard.append([InlineKeyboardButton("🛡️ تقرير الثغرات الأمنية (Vulnerability Report)", callback_data="vuln_report_prompt")])
-    keyboard.append([InlineKeyboardButton("🔍 فحص الروابط والملفات المشبوهة", callback_data="scan_links_prompt")])
-    keyboard.append([InlineKeyboardButton("🧠 تحدي واختبار مهارات السيبراني الفوري", callback_data="start_quick_quiz")])
-    keyboard.append([InlineKeyboardButton("📞 التواصل مع المشرفين وغرفة الدعم", callback_data="support_chat_prompt")])
-
-    if role:
-        keyboard.append([InlineKeyboardButton("👑 غرفة العمليات المركزية وسيادة الإدارة", callback_data="admin_main")])
-        
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    welcome_msg = f"🥷 **أهلاً بك مجدداً في المحطة المركزية**"
-    if student_row:
-        welcome_msg = f"🥷 **أهلاً بك أيها المتدرب ({student_row[1]})**\n🆔 الآيدي: `{student_row[0]}` | ⭐ رصيدك: `{student_row[2]}` نقطة"
-
-    await update.message.reply_text(welcome_msg, reply_markup=reply_markup, parse_mode="Markdown")
-
-async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    user_id = query.from_user.id
-    
-    if is_student_banned(user_id):
-        await query.message.reply_text("⛔ حسابك محظور.")
-        return
-
-    data = query.data
-    role = get_user_role(user_id)
-
-    if data == "back_home":
         if user_id in admin_state:
             del admin_state[user_id]
-        await start(update, context)
-        return
+            
+        role = get_user_role(user_id)
+        conn = sqlite3.connect("dark_cyber_academy.db")
+        cursor = conn.cursor()
+        cursor.execute("SELECT student_id, name, points FROM students WHERE user_id = ?", (user_id,))
+        student_row = cursor.fetchone()
+        conn.close()
 
-    if data == "admin_main":
-        if not role:
-            await query.answer("مرفوض! هذه المنطقة خاصة بالسيد والمشرفين فقط.", show_alert=True)
+        if not student_row and not role:
+            admin_state[user_id] = {"action": "wait_self_registration_name"}
+            await update.message.reply_text(
+                "🥷 **مرحباً بك في أكاديمية الأمن السيبراني (Cyber-Ops Empire v4.6)**\n\n"
+                "أنت تسجل لأول مرة في النظام. يرجى كتابة **اسمك الثلاثي** لحفظه في قاعدة البيانات وتوليد الآيدي الخاص بك:"
+            )
             return
-        
-        # الأزرار الأصلية كاملة + 5 أزرار إدارية جديدة مهمة
-        keyboard = [
-            [InlineKeyboardButton("➕ إضافة قسم أساسي جديد", callback_data="admin_add_main_sec")],
-            [InlineKeyboardButton("✏️ تعديل وإعادة تسمية الأقسام الرئيسية", callback_data="admin_edit_main_sec")],
-            [InlineKeyboardButton("➕ إضافة فرع/قسم جديد داخل الأقسام", callback_data="admin_add_sub_sec")],
-            [InlineKeyboardButton("✏️ تعديل وإعادة تسمية الأقسام والفروع", callback_data="admin_edit_sub_sec")],
-            [InlineKeyboardButton("📢 البث الإذاعي الشامل لجميع الرعية", callback_data="admin_broadcast")],
-            [InlineKeyboardButton("🧠 زرع تحدي واختبار سيبراني (Quiz)", callback_data="admin_add_quiz")],
-            [InlineKeyboardButton("📤 رفع أداة أو ملف استخباراتي جديد", callback_data="admin_upload_file")],
-            [InlineKeyboardButton("🗑️ حذف ملف أو عنصر من الأرشيف", callback_data="admin_delete_file")],
-            [InlineKeyboardButton("🎓 إدارة الطلاب والتقييمات والدرجات", callback_data="admin_manage_students")],
-            [InlineKeyboardButton("📬 فحص ومراجعة الواجبات المقدمة", callback_data="admin_view_submissions")],
-            [InlineKeyboardButton("🛡️ مراجعة تقارير الثغرات الأمنية", callback_data="admin_view_vulns")],
-            [InlineKeyboardButton("📞 متابعة تذاكر دعم ورسائل الرعية", callback_data="admin_support_tickets")],
-            [InlineKeyboardButton("👥 لوحة التحكم بالمشرفين والصلاحيات", callback_data="admin_manage_admins")],
-            [InlineKeyboardButton("📜 سجل تدقيق نشاطات المشرفين (Logs)", callback_data="admin_view_audit_logs")],
-            # الـ 5 أزرار الجديدة المهمة لإدارة أسرع:
-            [InlineKeyboardButton("⛔ حظر طالب من النظام", callback_data="admin_ban_student")],
-            [InlineKeyboardButton("🟢 إلغاء حظر طالب", callback_data="admin_unban_student")],
-            [InlineKeyboardButton("💬 إرسال تنبيه فردي لطالب", callback_data="admin_send_private_msg")],
-            [InlineKeyboardButton("📊 عرض إحصائيات الأكاديمية", callback_data="admin_academy_stats")],
-            [InlineKeyboardButton("🧹 تصفير نقاط طالب", callback_data="admin_reset_points")],
-            [InlineKeyboardButton("⬅️ رجوع للرئيسية", callback_data="back_home")]
-        ]
-        
-        await query.edit_message_text(
-            text=f"👑 **غرفة القيادة العليا (مستوى السيادة: `{role}`):**\nاختر العملية الإدارية المطلوبة:",
-            parse_mode="Markdown",
-            reply_markup=InlineKeyboardMarkup(keyboard)
-        )
 
-    # معالجة الأزرار المؤقتة للخيارات الجديدة أو القديمة
-    elif data in [
-        "admin_add_main_sec", "admin_edit_main_sec", "admin_add_sub_sec", "admin_edit_sub_sec",
-        "admin_broadcast", "admin_add_quiz", "admin_upload_file", "admin_delete_file",
-        "admin_manage_students", "admin_view_submissions", "admin_view_vulns", "admin_support_tickets",
-        "admin_manage_admins", "admin_view_audit_logs", "admin_ban_student", "admin_unban_student",
-        "admin_send_private_msg", "admin_academy_stats", "admin_reset_points"
-    ]:
-        if not role:
-            await query.answer("مرفوض!", show_alert=True)
-            return
+        keyboard = []
+        m_sections = get_all_main_sections()
+        for sec_key, sec_name in m_sections.items():
+            keyboard.append([InlineKeyboardButton(sec_name, callback_data=f"main_{sec_key}")])
         
-        if data == "admin_view_audit_logs":
+        keyboard.append([InlineKeyboardButton("🔍 الاستعلام الشامل عن الملف الأكاديمي بالآيدي", callback_data="student_lookup_prompt")])
+        keyboard.append([InlineKeyboardButton("📋 طلب مراجعة معلومات الطالب وتعديلها", callback_data="student_update_request")])
+        keyboard.append([InlineKeyboardButton("📤 رفع وإرسال حل مهمة / واجب عملي", callback_data="submit_task_prompt")])
+        keyboard.append([InlineKeyboardButton("🛡️ تقرير الثغرات الأمنية (Vulnerability Report)", callback_data="vuln_report_prompt")])
+        keyboard.append([InlineKeyboardButton("🔍 فحص الروابط والملفات المشبوهة", callback_data="scan_links_prompt")])
+        keyboard.append([InlineKeyboardButton("🧠 تحدي واختبار مهارات السيبراني الفوري", callback_data="start_quick_quiz")])
+        keyboard.append([InlineKeyboardButton("📞 التواصل مع المشرفين وغرفة الدعم", callback_data="support_chat_prompt")])
+
+        if role:
+            keyboard.append([InlineKeyboardButton("👑 غرفة العمليات المركزية وسيادة الإدارة", callback_data="admin_main")])
+            
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        welcome_msg = f"🥷 **أهلاً بك مجدداً في المحطة المركزية**"
+        if student_row:
+            welcome_msg = f"🥷 **أهلاً بك أيها المتدرب ({student_row[1]})**\n🆔 الآيدي: `{student_row[0]}` | ⭐ رصيدك: `{student_row[2]}` نقطة"
+
+        await update.message.reply_text(welcome_msg, reply_markup=reply_markup, parse_mode="Markdown")
+    except Exception as e:
+        logger.error(f"Error in start command: {e}")
+
+async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        query = update.callback_query
+        await query.answer()
+        user_id = query.from_user.id
+        
+        if is_student_banned(user_id):
+            await query.message.reply_text("⛔ حسابك محظور.")
+            return
+
+        data = query.data
+        role = get_user_role(user_id)
+
+        if data == "back_home":
+            if user_id in admin_state:
+                del admin_state[user_id]
+            await start(update, context)
+            return
+
+        if data == "admin_main":
+            if not role:
+                await query.answer("مرفوض! هذه المنطقة خاصة بالسيد والمشرفين فقط.", show_alert=True)
+                return
+            
+            keyboard = [
+                [InlineKeyboardButton("➕ إضافة قسم أساسي جديد", callback_data="admin_add_main_sec")],
+                [InlineKeyboardButton("✏️ تعديل وإعادة تسمية الأقسام الرئيسية", callback_data="admin_edit_main_sec")],
+                [InlineKeyboardButton("➕ إضافة فرع/قسم جديد داخل الأقسام", callback_data="admin_add_sub_sec")],
+                [InlineKeyboardButton("✏️ تعديل وإعادة تسمية الأقسام والفروع", callback_data="admin_edit_sub_sec")],
+                [InlineKeyboardButton("📢 البث الإذاعي الشامل لجميع الرعية", callback_data="admin_broadcast")],
+                [InlineKeyboardButton("🧠 زرع تحدي واختبار سيبراني (Quiz)", callback_data="admin_add_quiz")],
+                [InlineKeyboardButton("📤 رفع أداة أو ملف استخباراتي جديد", callback_data="admin_upload_file")],
+                [InlineKeyboardButton("🗑️ حذف ملف أو عنصر من الأرشيف", callback_data="admin_delete_file")],
+                [InlineKeyboardButton("🎓 إدارة الطلاب والتقييمات والدرجات", callback_data="admin_manage_students")],
+                [InlineKeyboardButton("📬 فحص ومراجعة الواجبات المقدمة", callback_data="admin_view_submissions")],
+                [InlineKeyboardButton("🛡️ مراجعة تقارير الثغرات الأمنية", callback_data="admin_view_vulns")],
+                [InlineKeyboardButton("📞 متابعة تذاكر دعم ورسائل الرعية", callback_data="admin_support_tickets")],
+                [InlineKeyboardButton("👥 لوحة التحكم بالمشرفين والصلاحيات", callback_data="admin_manage_admins")],
+                [InlineKeyboardButton("📜 سجل تدقيق نشاطات المشرفين (Logs)", callback_data="admin_view_audit_logs")],
+                [InlineKeyboardButton("⛔ حظر طالب من النظام", callback_data="admin_ban_student")],
+                [InlineKeyboardButton("🟢 إلغاء حظر طالب", callback_data="admin_unban_student")],
+                [InlineKeyboardButton("💬 إرسال تنبيه فردي لطالب", callback_data="admin_send_private_msg")],
+                [InlineKeyboardButton("📊 عرض إحصائيات الأكاديمية", callback_data="admin_academy_stats")],
+                [InlineKeyboardButton("🧹 تصفير نقاط طالب", callback_data="admin_reset_points")],
+                [InlineKeyboardButton("⬅️ رجوع للرئيسية", callback_data="back_home")]
+            ]
+            
+            await query.edit_message_text(
+                text=f"👑 **غرفة القيادة العليا (مستوى السيادة: `{role}`):**\nاختر العملية الإدارية المطلوبة:",
+                parse_mode="Markdown",
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
+
+        elif data == "admin_view_audit_logs":
+            if not role:
+                return
             conn = sqlite3.connect("dark_cyber_academy.db")
             cursor = conn.cursor()
             cursor.execute("SELECT admin_id, action_desc, timestamp FROM audit_logs ORDER BY id DESC LIMIT 10")
@@ -352,7 +356,10 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             for r in rows:
                 text += f"👤 المشرف: `{r[0]}`\n⚙️ الإجراء: {r[1]}\n⏱️ الوقت: {r[2]}\n------------------\n"
             await query.message.reply_text(text, parse_mode="Markdown")
+
         elif data == "admin_academy_stats":
+            if not role:
+                return
             conn = sqlite3.connect("dark_cyber_academy.db")
             cursor = conn.cursor()
             cursor.execute("SELECT COUNT(*) FROM students")
@@ -370,53 +377,62 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 parse_mode="Markdown"
             )
         else:
-            await query.message.reply_text(f"⚙️ تم النقر على زر العمليات بنجاح. القسم تحت التطوير والربط الكامل بقاعدة البيانات.")
+            if role:
+                await query.message.reply_text(f"⚙️ تم الاستلام بنجاح. هذه الوظيفة قيد التفعيل الكامل.")
+    except Exception as e:
+        logger.error(f"Error in button_handler: {e}")
 
 async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    text = update.message.text
-    
-    if is_student_banned(user_id) or user_id not in admin_state:
-        return
+    try:
+        user_id = update.effective_user.id
+        text = update.message.text
+        
+        if is_student_banned(user_id) or user_id not in admin_state:
+            return
 
-    state = admin_state[user_id]
-    action = state.get("action")
+        state = admin_state[user_id]
+        action = state.get("action")
 
-    if action == "wait_self_registration_name":
-        student_id = generate_unique_student_id()
-        conn = sqlite3.connect("dark_cyber_academy.db")
-        cursor = conn.cursor()
-        try:
-            cursor.execute(
-                "INSERT INTO students (student_id, user_id, name, points) VALUES (?, ?, ?, ?)",
-                (student_id, user_id, text, 0)
-            )
-            conn.commit()
-            del admin_state[user_id]
-            await update.message.reply_text(
-                f"✅ **تم تسجيلك بنجاح في النظام السيبراني!**\n\n"
-                f"👤 الاسم: `{text}`\n"
-                f"🆔 الآيدي الخاص بك: `{student_id}`",
-                parse_mode="Markdown"
-            )
-            await start(update, context)
-        except Exception as e:
-            await update.message.reply_text(f"⚠️ حدث خطأ أثناء التسجيل: {e}")
-        finally:
-            conn.close()
+        if action == "wait_self_registration_name":
+            student_id = generate_unique_student_id()
+            conn = sqlite3.connect("dark_cyber_academy.db")
+            cursor = conn.cursor()
+            try:
+                cursor.execute(
+                    "INSERT INTO students (student_id, user_id, name, points) VALUES (?, ?, ?, ?)",
+                    (student_id, user_id, text, 0)
+                )
+                conn.commit()
+                del admin_state[user_id]
+                await update.message.reply_text(
+                    f"✅ **تم تسجيلك بنجاح في النظام السيبراني!**\n\n"
+                    f"👤 الاسم: `{text}`\n"
+                    f"🆔 الآيدي الخاص بك: `{student_id}`",
+                    parse_mode="Markdown"
+                )
+                await start(update, context)
+            except Exception as e:
+                await update.message.reply_text(f"⚠️ حدث خطأ أثناء التسجيل: {e}")
+            finally:
+                conn.close()
+    except Exception as e:
+        logger.error(f"Error in message_handler: {e}")
 
 # ==========================================
 # 4. نقطة البدء التشغيلية
 # ==========================================
 def main():
-    app = ApplicationBuilder().token(BOT_TOKEN).build()
-    
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CallbackQueryHandler(button_handler))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message_handler))
-    
-    print("Starting Flask Web Server & Telegram Bot Polling simultaneously...")
-    app.run_polling()
+    try:
+        app = ApplicationBuilder().token(BOT_TOKEN).build()
+        
+        app.add_handler(CommandHandler("start", start))
+        app.add_handler(CallbackQueryHandler(button_handler))
+        app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message_handler))
+        
+        print("Starting Flask Web Server & Telegram Bot Polling simultaneously...")
+        app.run_polling()
+    except Exception as e:
+        logger.critical(f"Critical error starting bot: {e}")
 
 if __name__ == "__main__":
     main()
