@@ -1,5 +1,6 @@
 import subprocess
 import sys
+import time
 
 try:
     import telebot
@@ -19,7 +20,6 @@ def init_db():
     conn = sqlite3.connect('bot_database.db', check_same_thread=False)
     cursor = conn.cursor()
     
-    # جدول المستخدمين والطلاب
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS users (
             user_id INTEGER PRIMARY KEY,
@@ -31,7 +31,6 @@ def init_db():
         )
     ''')
     
-    # جدول صلاحيات المشرفين على الأقسام والمستويات
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS admin_permissions (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -40,7 +39,6 @@ def init_db():
         )
     ''')
     
-    # جدول الأقسام الرئيسية الديناميكية
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS faculties (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -48,12 +46,10 @@ def init_db():
             fac_name TEXT
         )
     ''')
-    # إضافة الأقسام الافتراضية
     cursor.execute("INSERT OR IGNORE INTO faculties (fac_key, fac_name) VALUES ('cyber', '🛡️ الأمن السيبراني')")
     cursor.execute("INSERT OR IGNORE INTO faculties (fac_key, fac_name) VALUES ('it', '💻 تقنية معلومات (IT)')")
     cursor.execute("INSERT OR IGNORE INTO faculties (fac_key, fac_name) VALUES ('arch', '🏛️ هندسة معمارية')")
 
-    # جدول الأزرار الفرعية المضافة داخل المستويات (مثل أساتذة أو مواد مخصصة لكل مستوى)
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS level_buttons (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -62,7 +58,6 @@ def init_db():
         )
     ''')
     
-    # جدول الملفات والملازم
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS files (
             file_id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -74,7 +69,6 @@ def init_db():
         )
     ''')
     
-    # جدول الأساتذة العام
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS instructors (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -85,7 +79,6 @@ def init_db():
     cursor.execute("INSERT OR IGNORE INTO instructors (name) VALUES ('أ. فريال المقطري')")
     cursor.execute("INSERT OR IGNORE INTO instructors (name) VALUES ('أ. مصطفى')")
 
-    # جدول السجلات الإدارية
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS logs (
             log_id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -95,7 +88,6 @@ def init_db():
         )
     ''')
     
-    # جدول الإعدادات العامة
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS settings (
             key TEXT PRIMARY KEY,
@@ -176,7 +168,7 @@ def send_welcome(message):
     bot.send_message(message.chat.id, f"مرحباً بك يا {fullname} في البوت الأكاديمي الشامل 🎓\nاختر من الأزرار بالأسفل للبدء:", reply_markup=markup)
 
 
-# ==================== تصفح الطلاب للأقسام والمستويات (ديناميكي بالكامل) ====================
+# ==================== تصفح الطلاب للأقسام والمستويات ====================
 
 @bot.message_handler(func=lambda msg: msg.text == "📂 تصفح الأقسام والملازم")
 def show_student_faculties(message):
@@ -231,7 +223,6 @@ def show_level_content_and_controls(call):
     conn.close()
     
     markup = types.InlineKeyboardMarkup(row_width=1)
-    
     for b in custom_btns:
         markup.add(types.InlineKeyboardButton(f"👨‍🏫 {b[1]}", callback_data=f"view_cbtn_{b[0]}"))
         
@@ -386,7 +377,6 @@ def admin_main_panel(message):
     conn.close()
 
     markup = types.InlineKeyboardMarkup(row_width=1)
-    
     for f in facs:
         markup.add(types.InlineKeyboardButton(f"🛡️ إدارة {f[1]}", callback_data=f"adm_fac_{f[0]}"))
         
@@ -781,17 +771,19 @@ def back_to_main(call):
 
 
 if __name__ == "__main__":
-    print("🚀 البوت يعمل الآن بكفاءة ومحمي ضد أخطاء التداخل...")
+    print("🚀 البوت يعمل الآن بكفاءة ومحمي ضد تداخل الجلسات...")
+    
+    # محاولة فرض إلغاء أي اتصال Webhook أو Polling قديم معلق في سيرفرات تيليجرام
     try:
         bot.remove_webhook()
+        time.sleep(1)
     except Exception:
         pass
 
+    # حلقة التشغيل الآمنة (إذا حدث خطأ 409 أو انقطع الاتصال، ينتظر البوت 5 ثوانٍ ويعاود الاتصال تلقائياً)
     while True:
         try:
-            # تم إصلاح الاستدعاء هنا لمنع تداخل المعاملات (non_stop) نهائياً
             bot.infinity_polling(timeout=60, long_polling_timeout=60)
         except Exception as e:
-            print(f"⚠️ تنبيه إعادة اتصال: {e}")
-            import time
-            time.sleep(3)
+            print(f"⚠️ تنبيه اتصال (سيتم إعادة المحاولة بعد 5 ثوانٍ): {e}")
+            time.sleep(5)
