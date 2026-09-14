@@ -310,21 +310,62 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await start(update, context)
             return
 
-        # معالجة الأقسام الرئيسية للطلاب
+        # معالجة الأقسام الرئيسية وعرض محتوياتها للطلاب
         if data.startswith("main_"):
             sec_key = data.replace("main_", "")
             m_sections = get_all_main_sections()
             sec_title = m_sections.get(sec_key, "القسم")
             
-            keyboard = [[InlineKeyboardButton("⬅️ رجوع للرئيسية", callback_data="back_home")]]
+            conn = sqlite3.connect("dark_cyber_academy.db")
+            cursor = conn.cursor()
+            cursor.execute("SELECT id, item_name, points_cost FROM content WHERE main_type = ?", (sec_key,))
+            items = cursor.fetchall()
+            conn.close()
+            
+            keyboard = []
+            if items:
+                for item in items:
+                    keyboard.append([InlineKeyboardButton(f"📁 {item[1]} (⭐ {item[2]})", callback_data=f"get_item_{item[0]}")])
+            else:
+                keyboard.append([InlineKeyboardButton("⚠️ لا توجد ملفات مرفوعة في هذا القسم حالياً", callback_data="noop")])
+                
+            keyboard.append([InlineKeyboardButton("⬅️ رجوع للرئيسية", callback_data="back_home")])
+            
             await query.edit_message_text(
-                text=f"📂 **{sec_title}**\n\nجارٍ تحميل محتويات هذا القسم أو الملفات المتاحة...",
+                text=f"📂 **{sec_title}**\n\nاختر الملف أو الأداة المطلوبة للتحميل:",
                 parse_mode="Markdown",
                 reply_markup=InlineKeyboardMarkup(keyboard)
             )
             return
 
-        # معالجة أزرار الخدمات الطلابية
+        # معالجة تسليم الملفات عند ضغط الطالب عليه
+        if data.startswith("get_item_"):
+            item_id = data.replace("get_item_", "")
+            conn = sqlite3.connect("dark_cyber_academy.db")
+            cursor = conn.cursor()
+            cursor.execute("SELECT item_name, file_id, file_type, points_cost FROM content WHERE id = ?", (item_id,))
+            item = cursor.fetchone()
+            conn.close()
+            
+            if not item:
+                await query.answer("⚠️ الملف غير موجود أو تم حذفه من الأرشيف.", show_alert=True)
+                return
+            
+            item_name, file_id, file_type, points_cost = item
+            
+            # إرسال الملف مباشرة للمستخدم حسب نوعه
+            if file_type == "document":
+                await context.bot.send_document(chat_id=user_id, document=file_id, caption=f"📁 {item_name}")
+            elif file_type == "photo":
+                await context.bot.send_photo(chat_id=user_id, photo=file_id, caption=f"📁 {item_name}")
+            elif file_type == "video":
+                await context.bot.send_video(chat_id=user_id, video=file_id, caption=f"📁 {item_name}")
+            elif file_type == "audio":
+                await context.bot.send_audio(chat_id=user_id, audio=file_id, caption=f"📁 {item_name}")
+            else:
+                await query.message.reply_text(f"📁 الملف: {item_name}")
+            return
+
         if data == "student_lookup_prompt":
             conn = sqlite3.connect("dark_cyber_academy.db")
             cursor = conn.cursor()
@@ -427,6 +468,34 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 reply_markup=InlineKeyboardMarkup(keyboard)
             )
 
+        elif data == "admin_upload_file":
+            if not role:
+                return
+            m_sections = get_all_main_sections()
+            keyboard = []
+            for sec_key, sec_name in m_sections.items():
+                keyboard.append([InlineKeyboardButton(sec_name, callback_data=f"upload_to_{sec_key}")])
+            keyboard.append([InlineKeyboardButton("⬅️ رجوع", callback_data="admin_main")])
+            
+            await query.edit_message_text(
+                text="📤 **رفع ملف أو أداة جديدة:**\nاختر القسم المراد رفع الملف إليه:",
+                parse_mode="Markdown",
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
+            return
+
+        elif data.startswith("upload_to_"):
+            if not role:
+                return
+            sec_key = data.replace("upload_to_", "")
+            admin_state[user_id] = {"action": "wait_file_upload_data", "main_type": sec_key}
+            await query.message.reply_text(
+                "📥 **خطوة أخيرة:**\n"
+                "قم بإرسال الملف (PDF، وثيقة، أداة، أو صورة) مع كتابة **اسم الملف** في تعليق (Caption) مع الملف، أو أرسل اسم الملف أولاً ثم ارفعه.",
+                parse_mode="Markdown"
+            )
+            return
+
         elif data == "admin_add_points_prompt":
             if not role:
                 return
@@ -434,23 +503,9 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.message.reply_text(
                 "⭐ **إضافة / خصم نقاط طالب:**\n\n"
                 "يرجى إرسال **آيدي الطالب** متبوعاً بـ **عدد النقاط** (استخدم القيمة بالسالب للخصم).\n"
-                "مثال للإضافة: `123456 50`\n"
-                "مثال للخصم: `123456 -20`",
+                "مثال للإضافة: `123456 50`",
                 parse_mode="Markdown"
             )
-
-        elif data == "admin_view_audit_logs":
-            if not role:
-                return
-            conn = sqlite3.connect("dark_cyber_academy.db")
-            cursor = conn.cursor()
-            cursor.execute("SELECT admin_id, action_desc, timestamp FROM audit_logs ORDER BY id DESC LIMIT 10")
-            rows = cursor.fetchall()
-            conn.close()
-            text = "📊 **آخر سجلات العمليات والإدارة:**\n\n"
-            for r in rows:
-                text += f"👤 المشرف: `{r[0]}`\n⚙️ الإجراء: {r[1]}\n⏱️ الوقت: {r[2]}\n------------------\n"
-            await query.message.reply_text(text, parse_mode="Markdown")
 
         elif data == "admin_academy_stats":
             if not role:
@@ -480,15 +535,18 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         user_id = update.effective_user.id
-        text = update.message.text
         
         if is_student_banned(user_id) or user_id not in admin_state:
-            return
+            if user_id in admin_state and admin_state[user_id].get("action") == "wait_file_upload_data":
+                pass
+            else:
+                return
 
         state = admin_state[user_id]
         action = state.get("action")
 
         if action == "wait_self_registration_name":
+            text = update.message.text
             student_id = generate_unique_student_id()
             conn = sqlite3.connect("dark_cyber_academy.db")
             cursor = conn.cursor()
@@ -512,16 +570,17 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 conn.close()
 
         elif action == "wait_for_points_input":
+            text = update.message.text
             parts = text.strip().split()
             if len(parts) < 2:
-                await update.message.reply_text("⚠️ الصيغة خاطئة. يرجى إرسال الآيدي ومقدار النقاط هكذا: `123456 50` أو `123456 -20`", parse_mode="Markdown")
+                await update.message.reply_text("⚠️ الصيغة خاطئة. يرجى إرسال الآيدي ومقدار النقاط هكذا: `123456 50`", parse_mode="Markdown")
                 return
             
             target_id = parts[0]
             try:
                 points_to_add = int(parts[1])
             except ValueError:
-                await update.message.reply_text("⚠️ مقدار النقاط يجب أن يكون رقماً صحيحاً.")
+                await update.number.reply_text("⚠️ مقدار النقاط يجب أن يكون رقماً صحيحاً.")
                 return
 
             conn = sqlite3.connect("dark_cyber_academy.db")
@@ -551,6 +610,80 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 parse_mode="Markdown"
             )
 
+        elif action == "wait_file_upload_data":
+            main_type = state.get("main_type")
+            file_id = None
+            file_type = "document"
+            item_name = update.message.caption or update.message.text or "ملف سيبراني"
+
+            if update.message.document:
+                file_id = update.message.document.file_id
+                file_type = "document"
+                if not update.message.caption and update.message.document.file_name:
+                    item_name = update.message.document.file_name
+            elif update.message.photo:
+                file_id = update.message.photo[-1].file_id
+                file_type = "photo"
+            elif update.message.video:
+                file_id = update.message.video.file_id
+                file_type = "video"
+            elif update.message.audio:
+                file_id = update.message.audio.file_id
+                file_type = "audio"
+            else:
+                admin_state[user_id] = {"action": "wait_file_upload_file", "main_type": main_type, "item_name": update.message.text}
+                await update.message.reply_text("📥 تم حفظ اسم الملف. الآن **أرسل الملف أو المستند** المرفق لتتم عملية الحفظ نهائياً:")
+                return
+
+            if file_id:
+                conn = sqlite3.connect("dark_cyber_academy.db")
+                cursor = conn.cursor()
+                cursor.execute(
+                    "INSERT INTO content (main_type, sec_key, item_name, file_id, file_type, points_cost) VALUES (?, ?, ?, ?, ?, ?)",
+                    (main_type, "general", item_name, file_id, file_type, 0)
+                )
+                conn.commit()
+                conn.close()
+
+                del admin_state[user_id]
+                log_admin_action(user_id, f"رفع ملف جديد '{item_name}' إلى قسم {main_type}")
+                await update.message.reply_text(f"✅ **تم رفع وتخزين الملف بنجاح في القسم المطلوب!**\n📁 اسم الملف: `{item_name}`", parse_mode="Markdown")
+
+        elif action == "wait_file_upload_file":
+            main_type = state.get("main_type")
+            item_name = state.get("item_name")
+            file_id = None
+            file_type = "document"
+
+            if update.message.document:
+                file_id = update.message.document.file_id
+                file_type = "document"
+            elif update.message.photo:
+                file_id = update.message.photo[-1].file_id
+                file_type = "photo"
+            elif update.message.video:
+                file_id = update.message.video.file_id
+                file_type = "video"
+            elif update.message.audio:
+                file_id = update.message.audio.file_id
+                file_type = "audio"
+
+            if file_id:
+                conn = sqlite3.connect("dark_cyber_academy.db")
+                cursor = conn.cursor()
+                cursor.execute(
+                    "INSERT INTO content (main_type, sec_key, item_name, file_id, file_type, points_cost) VALUES (?, ?, ?, ?, ?, ?)",
+                    (main_type, "general", item_name, file_id, file_type, 0)
+                )
+                conn.commit()
+                conn.close()
+
+                del admin_state[user_id]
+                log_admin_action(user_id, f"رفع ملف جديد '{item_name}' إلى قسم {main_type}")
+                await update.message.reply_text(f"✅ **تم رفع وتخزين الملف بنجاح في القسم المطلوب!**\n📁 اسم الملف: `{item_name}`", parse_mode="Markdown")
+            else:
+                await update.message.reply_text("⚠️ يرجى إرسال ملف صالح (مستند، صورة، فيديو، أو صوت).")
+
         elif action == "wait_task_submission":
             del admin_state[user_id]
             await update.message.reply_text("✅ **تم استلام حل المهمة بنجاح وتحويله إلى غرفة المراجعة السيبرانية للإدارة.**", parse_mode="Markdown")
@@ -575,7 +708,7 @@ def main():
         
         app.add_handler(CommandHandler("start", start))
         app.add_handler(CallbackQueryHandler(button_handler))
-        app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message_handler))
+        app.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, message_handler))
         
         print("Starting Flask Web Server & Telegram Bot Polling simultaneously...")
         app.run_polling()
