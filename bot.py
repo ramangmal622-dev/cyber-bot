@@ -40,6 +40,28 @@ def init_db():
         )
     ''')
     
+    # جدول الأقسام الرئيسية الديناميكية
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS faculties (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            fac_key TEXT UNIQUE,
+            fac_name TEXT
+        )
+    ''')
+    # إضافة الأقسام الافتراضية
+    cursor.execute("INSERT OR IGNORE INTO faculties (fac_key, fac_name) VALUES ('cyber', '🛡️ الأمن السيبراني')")
+    cursor.execute("INSERT OR IGNORE INTO faculties (fac_key, fac_name) VALUES ('it', '💻 تقنية معلومات (IT)')")
+    cursor.execute("INSERT OR IGNORE INTO faculties (fac_key, fac_name) VALUES ('arch', '🏛️ هندسة معمارية')")
+
+    # جدول المادة / الزر الفرعي داخل المستويات (مثل أساتذة أو مواد مخصصة لكل مستوى)
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS level_buttons (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            category TEXT,
+            button_name TEXT
+        )
+    ''')
+    
     # جدول الملفات والملازم
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS files (
@@ -52,7 +74,7 @@ def init_db():
         )
     ''')
     
-    # جدول الأساتذة (ديناميكي)
+    # جدول الأساتذة العام
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS instructors (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -63,7 +85,7 @@ def init_db():
     cursor.execute("INSERT OR IGNORE INTO instructors (name) VALUES ('أ. فريال المقطري')")
     cursor.execute("INSERT OR IGNORE INTO instructors (name) VALUES ('أ. مصطفى')")
 
-    # جدول السجلات (Logs)
+    # جدول السجلات الإدارية
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS logs (
             log_id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -73,7 +95,7 @@ def init_db():
         )
     ''')
     
-    # جدول الإعدادات العامة (مثل وضع الصيانة)
+    # جدول الإعدادات العامة
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS settings (
             key TEXT PRIMARY KEY,
@@ -102,16 +124,6 @@ def is_admin(user_id):
     res = cursor.fetchone()
     conn.close()
     return res and res[0] == 1
-
-def has_section_permission(user_id, section_key):
-    if user_id == OWNER_ID:
-        return True
-    conn = get_db()
-    cursor = conn.cursor()
-    cursor.execute("SELECT id FROM admin_permissions WHERE user_id = ? AND section_key = ?", (user_id, section_key))
-    res = cursor.fetchone()
-    conn.close()
-    return res is not None
 
 def check_maintenance(user_id):
     if user_id == OWNER_ID or is_admin(user_id):
@@ -164,22 +176,31 @@ def send_welcome(message):
     bot.send_message(message.chat.id, f"مرحباً بك يا {fullname} في البوت الأكاديمي الشامل 🎓\nاختر من الأزرار بالأسفل للبدء:", reply_markup=markup)
 
 
-# ==================== تصفح الطلاب للأقسام والمستويات ====================
+# ==================== تصفح الطلاب للأقسام والمستويات (ديناميكي بالكامل) ====================
 
 @bot.message_handler(func=lambda msg: msg.text == "📂 تصفح الأقسام والملازم")
 def show_student_faculties(message):
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute("SELECT fac_key, fac_name FROM faculties")
+    facs = cursor.fetchall()
+    conn.close()
+
     markup = types.InlineKeyboardMarkup(row_width=1)
-    markup.add(
-        types.InlineKeyboardButton("🛡️ الأمن السيبراني", callback_data="fac_cyber"),
-        types.InlineKeyboardButton("💻 تقنية معلومات (IT)", callback_data="fac_it"),
-        types.InlineKeyboardButton("🏛️ هندسة معمارية", callback_data="fac_arch")
-    )
+    for f in facs:
+        markup.add(types.InlineKeyboardButton(f[1], callback_data=f"fac_{f[0]}"))
+    
     bot.send_message(message.chat.id, "📂 **اختر التخصص الدراسي المطلوب:**", reply_markup=markup, parse_mode="Markdown")
 
-@bot.callback_query_handler(func=lambda call: call.data in ["fac_cyber", "fac_it", "fac_arch"])
+@bot.callback_query_handler(func=lambda call: call.data.startswith("fac_") and not call.data.startswith("adm_fac_"))
 def show_levels_for_faculty(call):
     prefix = call.data.replace("fac_", "")
-    fac_names = {"cyber": "🛡️ الأمن السيبراني", "it": "💻 تقنية معلومات (IT)", "arch": "🏛️ هندسة معمارية"}
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute("SELECT fac_name FROM faculties WHERE fac_key = ?", (prefix,))
+    res = cursor.fetchone()
+    fac_title = res[0] if res else prefix
+    conn.close()
     
     markup = types.InlineKeyboardMarkup(row_width=2)
     markup.add(
@@ -190,24 +211,71 @@ def show_levels_for_faculty(call):
         types.InlineKeyboardButton("🔙 العودة للتخصصات", callback_data="back_to_faculties")
     )
     try:
-        bot.edit_message_text(f"📚 **{fac_names.get(prefix)}**\nاختر المستوى الدراسي المطلوب:", call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode="Markdown")
+        bot.edit_message_text(f"📚 **{fac_title}**\nاختر المستوى الدراسي المطلوب:", call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode="Markdown")
     except Exception:
         pass
 
-@bot.callback_query_handler(func=lambda call: call.data.startswith("lvl_") and not call.data.startswith("adm_lvl_"))
+@bot.callback_query_handler(func=lambda call: call.data.startswith("lvl_") and not call.data.startswith("adm_lvl_") and not call.data.startswith("btn_lvl_"))
 def show_level_content_and_controls(call):
     _, prefix, level_num = call.data.split("_")
-    fac_titles = {"cyber": "الأمن السيبراني", "it": "تقنية المعلومات", "arch": "الهندسة المعمارية"}
+    category = f"{prefix}_{level_num}"
+    
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute("SELECT fac_name FROM faculties WHERE fac_key = ?", (prefix,))
+    res = cursor.fetchone()
+    fac_title = res[0] if res else prefix
+    
+    # جلب الأزرار المضافة خصيصاً لهذا المستوى (مثل أساتذة المادة المضافين)
+    cursor.execute("SELECT id, button_name FROM level_buttons WHERE category = ?", (category,))
+    custom_btns = cursor.fetchall()
+    conn.close()
     
     markup = types.InlineKeyboardMarkup(row_width=1)
+    
+    # عرض الأزرار المضافة خصيصاً للمستوى
+    for b in custom_btns:
+        markup.add(types.InlineKeyboardButton(f"👨‍🏫 {b[1]}", callback_data=f"view_cbtn_{b[0]}"))
+        
     markup.add(
-        types.InlineKeyboardButton("📁 عرض ملازم وكتب هذا المستوى", callback_data=f"getfiles_{prefix}_{level_num}"),
+        types.InlineKeyboardButton("📁 عرض كافة ملفات هذا المستوى", callback_data=f"getfiles_{prefix}_{level_num}"),
         types.InlineKeyboardButton("🔙 العودة للمستويات", callback_data=f"fac_{prefix}")
     )
     try:
-        bot.edit_message_text(f"🎓 **تخصص {fac_titles.get(prefix)} - المستوى {level_num}**\nاختر الإجراء:", call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode="Markdown")
+        bot.edit_message_text(f"🎓 **{fac_title} - المستوى {level_num}**\nاختر المادة أو الإجراء:", call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode="Markdown")
     except Exception:
         pass
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith("view_cbtn_"))
+def view_custom_button_files(call):
+    btn_id = call.data.replace("view_cbtn_", "")
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute("SELECT button_name, category FROM level_buttons WHERE id = ?", (btn_id,))
+    b_data = cursor.fetchone()
+    if not b_data:
+        bot.answer_callback_query(call.id, "⚠️ العنصر غير موجود.", show_alert=True)
+        conn.close()
+        return
+    
+    b_name, category = b_data[0], b_data[1]
+    cursor.execute("SELECT file_id_tg, file_name, file_type FROM files WHERE category = ? AND instructor = ?", (category, b_name))
+    files = cursor.fetchall()
+    conn.close()
+    
+    if not files:
+        bot.answer_callback_query(call.id, f"📭 لا توجد ملفات مرفوعة تحت اسم ({b_name}) حالياً.", show_alert=True)
+        return
+        
+    bot.answer_callback_query(call.id, f"📂 جاري إرسال ملفات {b_name}...")
+    for f in files:
+        try:
+            if f[2] == 'document':
+                bot.send_document(call.message.chat.id, f[0], caption=f"📄 {f[1]}\n📌 بواسطة: {b_name}")
+            elif f[2] == 'photo':
+                bot.send_photo(call.message.chat.id, f[0], caption=f"📄 {f[1]}\n📌 بواسطة: {b_name}")
+        except Exception:
+            pass
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("getfiles_"))
 def student_get_files(call):
@@ -226,13 +294,11 @@ def student_get_files(call):
     
     bot.answer_callback_query(call.id, "📂 جاري إرسال الملفات...")
     for f in files:
-        file_tg, f_name, f_type, inst = f[0], f[1], f[2], f[3]
-        caption = f"📄 {f_name}\n👨‍🏫 الأستاذ: {inst}"
         try:
-            if f_type == 'document':
-                bot.send_document(call.message.chat.id, file_tg, caption=caption)
-            elif f_type == 'photo':
-                bot.send_photo(call.message.chat.id, file_tg, caption=caption)
+            if f[2] == 'document':
+                bot.send_document(call.message.chat.id, f[0], caption=f"📄 {f[1]}\n👨‍🏫 الأستاذ: {f[3]}")
+            elif f[2] == 'photo':
+                bot.send_photo(call.message.chat.id, f[0], caption=f"📄 {f[1]}\n👨‍🏫 الأستاذ: {f[3]}")
         except Exception:
             pass
 
@@ -241,7 +307,7 @@ def back_to_faculties_handler(call):
     show_student_faculties(call.message)
 
 
-# ==================== قسم الأساتذة والمواد (ديناميكي) ====================
+# ==================== قسم الأساتذة والمواد ====================
 
 @bot.message_handler(func=lambda msg: msg.text == "👨‍🏫 قسم الأساتذة والمواد")
 def show_instructors(message):
@@ -253,8 +319,7 @@ def show_instructors(message):
 
     markup = types.InlineKeyboardMarkup(row_width=1)
     for inst in instructors:
-        inst_name = inst[0]
-        markup.add(types.InlineKeyboardButton(f"📚 ملفات {inst_name}", callback_data=f"inst_{inst_name}"))
+        markup.add(types.InlineKeyboardButton(f"📚 ملفات {inst[0]}", callback_data=f"inst_{inst[0]}"))
     
     markup.add(types.InlineKeyboardButton("🔙 العودة للقائمة الرئيسية", callback_data="main_menu_cb"))
     bot.send_message(message.chat.id, "👨‍🏫 **اختر الأستاذ لعرض مواده وملفاته الدراسية:**", reply_markup=markup, parse_mode="Markdown")
@@ -274,18 +339,13 @@ def show_instructor_files(call):
     
     bot.answer_callback_query(call.id, f"📂 ملفات {instructor_name}...")
     for f in files:
-        file_tg, f_name, f_type, cat = f[0], f[1], f[2], f[3]
-        caption = f"📄 {f_name}\n📌 القسم: {cat}"
         try:
-            if f_type == 'document':
-                bot.send_document(call.message.chat.id, file_tg, caption=caption)
-            elif f_type == 'photo':
-                bot.send_photo(call.message.chat.id, file_tg, caption=caption)
+            if f[2] == 'document':
+                bot.send_document(call.message.chat.id, f[0], caption=f"📄 {f[1]}\n📌 القسم: {f[3]}")
+            elif f[2] == 'photo':
+                bot.send_photo(call.message.chat.id, f[0], caption=f"📄 {f[1]}\n📌 القسم: {f[3]}")
         except Exception:
             pass
-
-
-# ==================== الملف الشخصي والنقاط والدعم ====================
 
 @bot.message_handler(func=lambda msg: msg.text == "⭐ نقاطي ومعلوماتي")
 def my_profile(message):
@@ -312,7 +372,7 @@ def contact_support(message):
     bot.reply_to(message, "💬 لأي استفسار أو مشكلة تقنية تواجهك داخل البوت، يرجى التواصل مع إدارة البوت أو مشرف القسم.")
 
 
-# ==================== لوحة تحكم الأدمن الشاملة (التحكم الكامل) ====================
+# ==================== لوحة تحكم الأدمن الشاملة ====================
 
 @bot.message_handler(func=lambda msg: msg.text == "👑 لوحة تحكم الأدمن الشاملة")
 def admin_main_panel(message):
@@ -321,11 +381,20 @@ def admin_main_panel(message):
         bot.reply_to(message, "❌ عذراً، هذا القسم مخصص للمشرفين فقط.")
         return
 
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute("SELECT fac_key, fac_name FROM faculties")
+    facs = cursor.fetchall()
+    conn.close()
+
     markup = types.InlineKeyboardMarkup(row_width=1)
+    
+    # توليد أزرار الأقسام الرئيسية ديناميكياً في لوحة التحكم
+    for f in facs:
+        markup.add(types.InlineKeyboardButton(f"🛡️ إدارة {f[1]}", callback_data=f"adm_fac_{f[0]}"))
+        
     markup.add(
-        types.InlineKeyboardButton("🛡️ أدمن قسم الأمن السيبراني", callback_data="adm_fac_cyber"),
-        types.InlineKeyboardButton("💻 أدمن قسم تقنية المعلومات (IT)", callback_data="adm_fac_it"),
-        types.InlineKeyboardButton("🏛️ أدمن قسم الهندسة المعمارية", callback_data="adm_fac_arch"),
+        types.InlineKeyboardButton("➕ إضافة قسم رئيسي جديد", callback_data="adm_add_faculty"),
         types.InlineKeyboardButton("👥 إدارة الطلاب والنقاط والحظر", callback_data="adm_users_mgmt"),
         types.InlineKeyboardButton("👑 إدارة المشرفين والصلاحيات", callback_data="adm_perms_mgmt"),
         types.InlineKeyboardButton("➕ إضافة أستاذ جديد للقائمة", callback_data="adm_add_instructor"),
@@ -335,7 +404,7 @@ def admin_main_panel(message):
     bot.send_message(message.chat.id, "👑 **لوحة التحكم الإدارية المركزية الشاملة:**\nاختر القسم المطلوب للإدارة والتحكم الكامل:", reply_markup=markup, parse_mode="Markdown")
 
 
-@bot.callback_query_handler(func=lambda call: call.data.startswith("adm_") or call.data.startswith("up_lvl_") or call.data.startswith("del_lvl_") or call.data.startswith("inst_pick_") or call.data.startswith("user_") or call.data.startswith("perm_"))
+@bot.callback_query_handler(func=lambda call: call.data.startswith("adm_") or call.data.startswith("up_lvl_") or call.data.startswith("del_lvl_") or call.data.startswith("btn_lvl_") or call.data.startswith("inst_pick_") or call.data.startswith("user_") or call.data.startswith("perm_"))
 def admin_sections_router(call):
     user_id = call.from_user.id
     if not is_admin(user_id):
@@ -350,90 +419,85 @@ def admin_sections_router(call):
         conn.close()
         return
 
-    # أقسام الكليات للإدارة
-    if call.data == "adm_fac_cyber":
+    # إضافة قسم رئيسي جديد
+    if call.data == "adm_add_faculty":
+        bot.answer_callback_query(call.id)
+        msg = bot.send_message(call.message.chat.id, "✍️ أرسل **مفتاح القسم بالإنجليزية** و **اسم القسم بالعربي** (مثال:\n`med كلية الطب`):")
+        bot.register_next_step_handler(msg, save_new_faculty)
+        conn.close()
+        return
+
+    # إدارة الكليات المضافة ديناميكياً
+    if call.data.startswith("adm_fac_"):
+        prefix = call.data.replace("adm_fac_", "")
+        cursor.execute("SELECT fac_name FROM faculties WHERE fac_key = ?", (prefix,))
+        res = cursor.fetchone()
+        fac_title = res[0] if res else prefix
+        
         markup = types.InlineKeyboardMarkup(row_width=1)
         markup.add(
-            types.InlineKeyboardButton("1️⃣ المستوى الأول", callback_data="adm_lvl_cyber_1"),
-            types.InlineKeyboardButton("2️⃣ المستوى الثاني", callback_data="adm_lvl_cyber_2"),
-            types.InlineKeyboardButton("3️⃣ المستوى الثالث", callback_data="adm_lvl_cyber_3"),
-            types.InlineKeyboardButton("4️⃣ المستوى الرابع", callback_data="adm_lvl_cyber_4"),
+            types.InlineKeyboardButton("1️⃣ المستوى الأول", callback_data=f"adm_lvl_{prefix}_1"),
+            types.InlineKeyboardButton("2️⃣ المستوى الثاني", callback_data=f"adm_lvl_{prefix}_2"),
+            types.InlineKeyboardButton("3️⃣ المستوى الثالث", callback_data=f"adm_lvl_{prefix}_3"),
+            types.InlineKeyboardButton("4️⃣ المستوى الرابع", callback_data=f"adm_lvl_{prefix}_4"),
             types.InlineKeyboardButton("🔙 رجوع", callback_data="adm_back_main")
         )
         try:
-            bot.edit_message_text("🛡️ **إدارة قسم الأمن السيبراني:**\nاختر المستوى:", call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode="Markdown")
+            bot.edit_message_text(f"📂 **إدارة قسم: {fac_title}**\nاختر المستوى:", call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode="Markdown")
         except Exception:
             pass
 
-    elif call.data == "adm_fac_it":
-        markup = types.InlineKeyboardMarkup(row_width=1)
-        markup.add(
-            types.InlineKeyboardButton("1️⃣ المستوى الأول", callback_data="adm_lvl_it_1"),
-            types.InlineKeyboardButton("2️⃣ المستوى الثاني", callback_data="adm_lvl_it_2"),
-            types.InlineKeyboardButton("3️⃣ المستوى الثالث", callback_data="adm_lvl_it_3"),
-            types.InlineKeyboardButton("4️⃣ المستوى الرابع", callback_data="adm_lvl_it_4"),
-            types.InlineKeyboardButton("🔙 رجوع", callback_data="adm_back_main")
-        )
-        try:
-            bot.edit_message_text("💻 **إدارة قسم تقنية المعلومات:**\nاختر المستوى:", call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode="Markdown")
-        except Exception:
-            pass
-
-    elif call.data == "adm_fac_arch":
-        markup = types.InlineKeyboardMarkup(row_width=1)
-        markup.add(
-            types.InlineKeyboardButton("1️⃣ المستوى الأول", callback_data="adm_lvl_arch_1"),
-            types.InlineKeyboardButton("2️⃣ المستوى الثاني", callback_data="adm_lvl_arch_2"),
-            types.InlineKeyboardButton("3️⃣ المستوى الثالث", callback_data="adm_lvl_arch_3"),
-            types.InlineKeyboardButton("4️⃣ المستوى الرابع", callback_data="adm_lvl_arch_4"),
-            types.InlineKeyboardButton("🔙 رجوع", callback_data="adm_back_main")
-        )
-        try:
-            bot.edit_message_text("🏛️ **إدارة قسم الهندسة المعمارية:**\nاختر المستوى:", call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode="Markdown")
-        except Exception:
-            pass
-
-    # مستويات الإدارة والتحقق من الصلاحيات للمشرف الفرعي
+    # مستويات الإدارة لكل قسم (مع زر إضافة زر/أستاذ جديد للمستوى)
     elif call.data.startswith("adm_lvl_"):
         _, _, prefix, lvl = call.data.split("_")
         sec_key = f"{prefix}_{lvl}"
         
-        if not is_owner(user_id) and not has_section_permission(user_id, sec_key):
-            bot.answer_callback_query(call.id, "❌ عذراً، لست مشرفاً مخولاً لهذا المستوى المخصص!", show_alert=True)
-            conn.close()
-            return
-            
-        fac_names = {"cyber": "الأمن السيبراني", "it": "تقنية المعلومات", "arch": "الهندسة المعمارية"}
+        cursor.execute("SELECT fac_name FROM faculties WHERE fac_key = ?", (prefix,))
+        res = cursor.fetchone()
+        fac_title = res[0] if res else prefix
+        
         markup = types.InlineKeyboardMarkup(row_width=1)
         markup.add(
+            types.InlineKeyboardButton("➕ إضافة زر أستاذ/مادة لهذا المستوى", callback_data=f"btn_lvl_add_{sec_key}"),
             types.InlineKeyboardButton("➕ رفع ملف جديد لهذا المستوى", callback_data=f"up_lvl_{sec_key}"),
             types.InlineKeyboardButton("🗑️ حذف ملفات هذا المستوى", callback_data=f"del_lvl_{sec_key}"),
             types.InlineKeyboardButton(f"🔙 رجوع", callback_data=f"adm_fac_{prefix}")
         )
         try:
-            bot.edit_message_text(f"⚙️ **إدارة مشرف: {fac_names.get(prefix)} - المستوى {lvl}**", call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode="Markdown")
+            bot.edit_message_text(f"⚙️ **إدارة: {fac_title} - المستوى {lvl}**", call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode="Markdown")
         except Exception:
             pass
 
-    # إضافة أستاذ جديد ديناميكياً
+    # طلب إضافة زر جديد داخل المستوى (مثل اسم دكتور مخصص)
+    elif call.data.startswith("btn_lvl_add_"):
+        sec_key = call.data.replace("btn_lvl_add_", "")
+        bot.answer_callback_query(call.id)
+        msg = bot.send_message(call.message.chat.id, "✍️ أرسل الآن **اسم الدكتور أو الزر الجديد** الذي تريد إضافته لهذا المستوى (مثال: `د. سامي العبسي`):")
+        bot.register_next_step_handler(msg, save_level_custom_button, sec_key)
+
     elif call.data == "adm_add_instructor":
         bot.answer_callback_query(call.id)
-        msg = bot.send_message(call.message.chat.id, "✍️ أرسل الآن **اسم الأستاذ الجديد** (مثال: `د. أحمد محمد`) لإضافته إلى قائمة الأزرار فوراً:")
+        msg = bot.send_message(call.message.chat.id, "✍️ أرسل الآن **اسم الأستاذ الجديد** للقائمة العامة:")
         bot.register_next_step_handler(msg, save_new_instructor_to_db)
 
-    # رفع ملف واختيار الأستاذ
     elif call.data.startswith("up_lvl_"):
         sec_key = call.data.replace("up_lvl_", "")
+        
+        # جلب الأزرار الخاصة بهذا المستوى بالإضافة للأساتذة العامين
+        cursor.execute("SELECT button_name FROM level_buttons WHERE category = ?", (sec_key,))
+        lvl_btns = cursor.fetchall()
         cursor.execute("SELECT name FROM instructors")
-        instructors = cursor.fetchall()
+        general_inst = cursor.fetchall()
         
         markup = types.InlineKeyboardMarkup(row_width=1)
-        for inst in instructors:
-            inst_name = inst[0]
-            markup.add(types.InlineKeyboardButton(f"👨‍🏫 {inst_name}", callback_data=f"inst_pick_{sec_key}_{inst_name}"))
+        for b in lvl_btns:
+            markup.add(types.InlineKeyboardButton(f"📌 [مستوى] {b[0]}", callback_data=f"inst_pick_{sec_key}_{b[0]}"))
+        for inst in general_inst:
+            markup.add(types.InlineKeyboardButton(f"👨‍🏫 [عام] {inst[0]}", callback_data=f"inst_pick_{sec_key}_{inst[0]}"))
+            
         markup.add(types.InlineKeyboardButton("🔙 رجوع", callback_data="adm_back_main"))
         try:
-            bot.edit_message_text("👨‍🏫 **اختر الأستاذ التابع له هذا الملف:**", call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode="Markdown")
+            bot.edit_message_text("👨‍🏫 **اختر الجهة/الأستاذ التابع له هذا الملف:**", call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode="Markdown")
         except Exception:
             pass
 
@@ -443,7 +507,7 @@ def admin_sections_router(call):
         instructor_name = "_".join(parts[2:])
         
         bot.answer_callback_query(call.id)
-        msg = bot.send_message(call.message.chat.id, f"📥 تم اختيار الأستاذ: **{instructor_name}**\n\nأرسل الآن الملف (مستند PDF أو صورة) ليتم حفظه وربطه به مباشرة:")
+        msg = bot.send_message(call.message.chat.id, f"📥 تم اختيار الموجه: **{instructor_name}**\n\nأرسل الآن الملف (مستند PDF أو صورة):")
         bot.register_next_step_handler(msg, save_uploaded_file_with_instructor, sec_key, instructor_name)
 
     elif call.data.startswith("del_lvl_"):
@@ -452,10 +516,8 @@ def admin_sections_router(call):
         conn.commit()
         bot.answer_callback_query(call.id, "🗑️ تم حذف جميع ملفات هذا المستوى بنجاح!", show_alert=True)
 
-    # ==================== إدارة الطلاب (إضافة/خصم نقاط، حظر) ====================
+    # إدارة الطلاب والنقاط
     elif call.data == "adm_users_mgmt":
-        if not is_owner(user_id) and not is_admin(user_id):
-            return
         markup = types.InlineKeyboardMarkup(row_width=1)
         markup.add(
             types.InlineKeyboardButton("➕ إضافة نقاط لطالب", callback_data="user_add_points"),
@@ -470,12 +532,12 @@ def admin_sections_router(call):
 
     elif call.data == "user_add_points":
         bot.answer_callback_query(call.id)
-        msg = bot.send_message(call.message.chat.id, "✍️ أرسل **آيدي الطالب** و **عدد النقاط** للإضافة (مثال هكذا:\n`123456789 50`):")
+        msg = bot.send_message(call.message.chat.id, "✍️ أرسل **آيدي الطالب** و **عدد النقاط** للإضافة (مثال: `123456 50`):")
         bot.register_next_step_handler(msg, process_add_points)
 
     elif call.data == "user_sub_points":
         bot.answer_callback_query(call.id)
-        msg = bot.send_message(call.message.chat.id, "✍️ أرسل **آيدي الطالب** و **عدد النقاط** للخصم (مثال هكذا:\n`123456789 20`):")
+        msg = bot.send_message(call.message.chat.id, "✍️ أرسل **آيدي الطالب** و **عدد النقاط** للخصم (مثال: `123456 20`):")
         bot.register_next_step_handler(msg, process_sub_points)
 
     elif call.data == "user_ban_toggle":
@@ -483,38 +545,31 @@ def admin_sections_router(call):
         msg = bot.send_message(call.message.chat.id, "✍️ أرسل **آيدي الطالب** لحظره أو إلغاء حظره:")
         bot.register_next_step_handler(msg, process_ban_user)
 
-    # ==================== إدارة المشرفين والصلاحيات ====================
+    # إدارة الصلاحيات
     elif call.data == "adm_perms_mgmt":
         if not is_owner(user_id):
-            bot.answer_callback_query(call.id, "❌ قسم إعطاء الصلاحيات مخصص لمالك البوت فقط!", show_alert=True)
+            bot.answer_callback_query(call.id, "❌ مخصص لمالك البوت فقط!", show_alert=True)
             conn.close()
             return
         markup = types.InlineKeyboardMarkup(row_width=1)
         markup.add(
             types.InlineKeyboardButton("👑 تعيين أدمن عام للبوت", callback_data="perm_set_general"),
-            types.InlineKeyboardButton("⚙️ إعطاء صلاحية لمستوى محدد", callback_data="perm_set_level"),
             types.InlineKeyboardButton("🔙 رجوع", callback_data="adm_back_main")
         )
         try:
-            bot.edit_message_text("👑 **إدارة المشرفين والصلاحيات الأكاديمية:**", call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode="Markdown")
+            bot.edit_message_text("👑 **إدارة المشرفين:**", call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode="Markdown")
         except Exception:
             pass
 
     elif call.data == "perm_set_general":
         bot.answer_callback_query(call.id)
-        msg = bot.send_message(call.message.chat.id, "✍️ أرسل **آيدي المستخدم** لتعيينه مشرفاً عاماً على البوت:")
+        msg = bot.send_message(call.message.chat.id, "✍️ أرسل **آيدي المستخدم** لتعيينه مشرفاً عاماً:")
         bot.register_next_step_handler(msg, process_make_general_admin)
 
-    elif call.data == "perm_set_level":
-        bot.answer_callback_query(call.id)
-        msg = bot.send_message(call.message.chat.id, "✍️ أرسل **آيدي المستخدم** و **مفتاح القسم والمستوى** (مثال:\n`123456789 cyber_1`):\n\n*(المفتاح للتخصصات: `cyber_1` للأمن السيبراني أول، `it_2` لتقنية معلومات ثانٍ، إلخ).*")
-        bot.register_next_step_handler(msg, process_assign_section_perm)
-
-    # ==================== الإذاعة والنظام ====================
     elif call.data == "adm_broadcast_start":
         if not is_owner(user_id):
             return
-        msg = bot.send_message(call.message.chat.id, "📢 أرسل الرسالة أو الإعلان المراد إذاعته لجميع الطلاب الآن:")
+        msg = bot.send_message(call.message.chat.id, "📢 أرسل الإذاعة المراد إرسالها لجميع الطلاب:")
         bot.register_next_step_handler(msg, process_global_broadcast)
 
     elif call.data == "adm_sec_system":
@@ -525,7 +580,7 @@ def admin_sections_router(call):
         cursor.execute("SELECT value FROM settings WHERE key='maintenance'")
         maint = cursor.fetchone()[0].upper()
         
-        stats = f"🛠️ **إحصائيات البوت:**\n- إجمالي الطلاب: `{total_u}`\n- إجمالي الملفات: `{total_f}`\n- وضع الصيانة: `{maint}`"
+        stats = f"🛠️ **الإحصائيات:**\n- إجمالي الطلاب: `{total_u}`\n- إجمالي الملفات: `{total_f}`\n- وضع الصيانة: `{maint}`"
         markup = types.InlineKeyboardMarkup(row_width=1)
         markup.add(
             types.InlineKeyboardButton("🛠️ تبديل وضع الصيانة", callback_data="adm_toggle_maint"),
@@ -542,12 +597,40 @@ def admin_sections_router(call):
         new_s = 'off' if cur == 'on' else 'on'
         cursor.execute("UPDATE settings SET value=? WHERE key='maintenance'", (new_s,))
         conn.commit()
-        bot.answer_callback_query(call.id, f"تم تغيير وضع الصيانة إلى: {new_s.upper()}", show_alert=True)
+        bot.answer_callback_query(call.id, f"تم تغيير الصيانة إلى: {new_s.upper()}", show_alert=True)
 
     conn.close()
 
 
-# ==================== الدوال التنفيذية لإدارة الطلاب والنقاط والصلاحيات ====================
+# ==================== دوال الحفظ الإدارية الجديدة ====================
+
+def save_new_faculty(message):
+    if not is_admin(message.from_user.id):
+        return
+    try:
+        parts = message.text.strip().split(maxsplit=1)
+        fac_key = parts[0].lower()
+        fac_name = parts[1]
+        
+        conn = get_db()
+        cursor = conn.cursor()
+        cursor.execute("INSERT INTO faculties (fac_key, fac_name) VALUES (?, ?)", (fac_key, fac_name))
+        conn.commit()
+        conn.close()
+        bot.reply_to(message, f"✅ **تم إضافة القسم الرئيسي الجديد ({fac_name}) بنجاح!**")
+    except Exception:
+        bot.reply_to(message, "⚠️ صيغة خاطئة. أرسل المفتاح بالإنجليزية ثم مسافة ثم اسم القسم (مثال: `med كلية الطب`).")
+
+def save_level_custom_button(message, category):
+    if not is_admin(message.from_user.id):
+        return
+    btn_name = message.text.strip()
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute("INSERT INTO level_buttons (category, button_name) VALUES (?, ?)", (category, btn_name))
+    conn.commit()
+    conn.close()
+    bot.reply_to(message, f"✅ **تم إضافة زر الدكتور/المادة ({btn_name}) بنجاح داخل هذا المستوى!**")
 
 def save_new_instructor_to_db(message):
     if not is_admin(message.from_user.id):
@@ -558,7 +641,7 @@ def save_new_instructor_to_db(message):
     try:
         cursor.execute("INSERT INTO instructors (name) VALUES (?)", (new_name,))
         conn.commit()
-        bot.reply_to(message, f"✅ **تم إضافة الأستاذ ({new_name}) بنجاح للقائمة والأزرار!**")
+        bot.reply_to(message, f"✅ **تم إضافة الأستاذ ({new_name}) بنجاح للقائمة العامة!**")
     except sqlite3.IntegrityError:
         bot.reply_to(message, "⚠️ هذا الأستاذ موجود مسبقاً.")
     finally:
@@ -585,41 +668,37 @@ def save_uploaded_file_with_instructor(message, category, instructor_name):
                    (category, instructor_name, file_id_tg, file_type, file_name))
     conn.commit()
     conn.close()
-    bot.reply_to(message, f"✅ **تم حفظ الملف بنجاح!**\n- مرتبط بالأستاذ: `{instructor_name}`.")
+    bot.reply_to(message, f"✅ **تم حفظ الملف بنجاح!**\n- مرتبط بـ: `{instructor_name}`.")
 
 def process_add_points(message):
     if not is_admin(message.from_user.id):
         return
     try:
         parts = message.text.strip().split()
-        target_id = int(parts[0])
-        pts = int(parts[1])
-        
+        target_id, pts = int(parts[0]), int(parts[1])
         conn = get_db()
         cursor = conn.cursor()
         cursor.execute("UPDATE users SET points = points + ? WHERE user_id = ?", (pts, target_id))
         conn.commit()
         conn.close()
-        bot.reply_to(message, f"✅ **تم إضافة عدد ({pts}) نقطة** للطالب صاحب الآيدي: `{target_id}` بنجاح.")
+        bot.reply_to(message, f"✅ **تم إضافة ({pts}) نقطة** بنجاح.")
     except Exception:
-        bot.reply_to(message, "⚠️ صيغة خاطئة. تأكد من إرسال الآيدي ومسافة ثم عدد النقاط.")
+        bot.reply_to(message, "⚠️ صيغة خاطئة.")
 
 def process_sub_points(message):
     if not is_admin(message.from_user.id):
         return
     try:
         parts = message.text.strip().split()
-        target_id = int(parts[0])
-        pts = int(parts[1])
-        
+        target_id, pts = int(parts[0]), int(parts[1])
         conn = get_db()
         cursor = conn.cursor()
         cursor.execute("UPDATE users SET points = MAX(0, points - ?) WHERE user_id = ?", (pts, target_id))
         conn.commit()
         conn.close()
-        bot.reply_to(message, f"✅ **تم خصم عدد ({pts}) نقطة** من رصيد الطالب صاحب الآيدي: `{target_id}` بنجاح.")
+        bot.reply_to(message, f"✅ **تم خصم ({pts}) نقطة** بنجاح.")
     except Exception:
-        bot.reply_to(message, "⚠️ صيغة خاطئة. تأكد من إرسال الآيدي ومسافة ثم عدد النقاط للخصم.")
+        bot.reply_to(message, "⚠️ صيغة خاطئة.")
 
 def process_ban_user(message):
     if not is_admin(message.from_user.id):
@@ -631,17 +710,14 @@ def process_ban_user(message):
         cursor.execute("SELECT is_banned FROM users WHERE user_id = ?", (target_id,))
         row = cursor.fetchone()
         if not row:
-            bot.reply_to(message, "⚠️ هذا المستخدم غير مسجل في قاعدة بيانات البوت.")
+            bot.reply_to(message, "⚠️ المستخدم غير مسجل.")
             conn.close()
             return
-            
         new_ban = 0 if row[0] == 1 else 1
         cursor.execute("UPDATE users SET is_banned = ? WHERE user_id = ?", (new_ban, target_id))
         conn.commit()
         conn.close()
-        
-        status_text = "تم حظر الطالب بنجاح 🚫" if new_ban == 1 else "تم إلغاء حظر الطالب بنجاح ✅"
-        bot.reply_to(message, status_text)
+        bot.reply_to(message, "تم حظر الطالب 🚫" if new_ban == 1 else "تم إلغاء الحظر ✅")
     except Exception:
         bot.reply_to(message, "⚠️ آيدي غير صالح.")
 
@@ -655,26 +731,9 @@ def process_make_general_admin(message):
         cursor.execute("UPDATE users SET is_admin = 1 WHERE user_id = ?", (target_id,))
         conn.commit()
         conn.close()
-        bot.reply_to(message, f"👑 **تم تعيين المستخدم ({target_id}) كأدمن عام** للبوت بنجاح!")
+        bot.reply_to(message, f"👑 **تم تعيين ({target_id}) كأدمن عام** بنجاح!")
     except Exception:
         bot.reply_to(message, "⚠️ آيدي غير صالح.")
-
-def process_assign_section_perm(message):
-    if not is_owner(message.from_user.id):
-        return
-    try:
-        parts = message.text.strip().split()
-        target_id = int(parts[0])
-        sec_key = parts[1]
-        
-        conn = get_db()
-        cursor = conn.cursor()
-        cursor.execute("INSERT INTO admin_permissions (user_id, section_key) VALUES (?, ?)", (target_id, sec_key))
-        conn.commit()
-        conn.close()
-        bot.reply_to(message, f"✅ **تم منح صلاحية الإشراف** على القسم/المستوى (`{sec_key}`) للمستخدم (`{target_id}`) بنجاح.")
-    except Exception:
-        bot.reply_to(message, "⚠️ صيغة خاطئة. أرسل الآيدي مسافة ثم مفتاح المستوى (مثال: `123456 cyber_1`).")
 
 def process_global_broadcast(message):
     if not is_owner(message.from_user.id):
@@ -685,27 +744,32 @@ def process_global_broadcast(message):
     users = cursor.fetchall()
     conn.close()
 
-    success, failed = 0, 0
-    status_msg = bot.send_message(message.chat.id, "⏳ جاري إرسال الإذاعة لجميع الطلاب...")
-
+    success = 0
+    status_msg = bot.send_message(message.chat.id, "⏳ جاري الإذاعة...")
     for u in users:
         try:
             bot.copy_message(chat_id=u[0], from_chat_id=message.chat.id, message_id=message.message_id)
             success += 1
         except Exception:
-            failed += 1
-
+            pass
     try:
-        bot.edit_message_text(f"✅ **تمت الإذاعة بنجاح!**\n- تم الإرسال إلى: `{success}` طالب", message.chat.id, status_msg.message_id, parse_mode="Markdown")
+        bot.edit_message_text(f"✅ **تمت الإذاعة بنجاح لـ (`{success}`) طالباً.**", message.chat.id, status_msg.message_id, parse_mode="Markdown")
     except Exception:
         pass
 
 def admin_main_panel_edit(call):
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute("SELECT fac_key, fac_name FROM faculties")
+    facs = cursor.fetchall()
+    conn.close()
+
     markup = types.InlineKeyboardMarkup(row_width=1)
+    for f in facs:
+        markup.add(types.InlineKeyboardButton(f"🛡️ إدارة {f[1]}", callback_data=f"adm_fac_{f[0]}"))
+        
     markup.add(
-        types.InlineKeyboardButton("🛡️ أدمن قسم الأمن السيبراني", callback_data="adm_fac_cyber"),
-        types.InlineKeyboardButton("💻 أدمن قسم تقنية المعلومات (IT)", callback_data="adm_fac_it"),
-        types.InlineKeyboardButton("🏛️ أدمن قسم الهندسة المعمارية", callback_data="adm_fac_arch"),
+        types.InlineKeyboardButton("➕ إضافة قسم رئيسي جديد", callback_data="adm_add_faculty"),
         types.InlineKeyboardButton("👥 إدارة الطلاب والنقاط والحظر", callback_data="adm_users_mgmt"),
         types.InlineKeyboardButton("👑 إدارة المشرفين والصلاحيات", callback_data="adm_perms_mgmt"),
         types.InlineKeyboardButton("➕ إضافة أستاذ جديد للقائمة", callback_data="adm_add_instructor"),
@@ -727,9 +791,16 @@ def back_to_main(call):
 
 
 if __name__ == "__main__":
-    print("🚀 البوت يعمل الآن بكفاءة 100% ومحمي من أخطاء السجلات...")
+    print("🚀 البوت يعمل الآن بكفاءة ومحمي ضد أخطاء التداخل...")
+    try:
+        bot.remove_webhook()
+    except Exception:
+        pass
+
     while True:
         try:
-            bot.infinity_polling(timeout=60, long_polling_timeout=60)
+            bot.infinity_polling(timeout=60, long_polling_timeout=60, non_stop=True)
         except Exception as e:
             print(f"⚠️ تنبيه إعادة اتصال: {e}")
+            import time
+            time.sleep(3)
