@@ -11,7 +11,7 @@ except ImportError:
 import sqlite3
 from telebot import types
 
-TOKEN = "8969629386:AAFbTJaSmJ-9ADKjSLazu4LXfvxFyExd35o"
+TOKEN = "8912899117:AAEm3AIIort2GI7G6fOC7nVvKOQSa9SAVaQ"
 bot = telebot.TeleBot(TOKEN)
 
 # الآيدي الخاص بك كأدمن أساسي (مالك البوت)
@@ -33,7 +33,7 @@ def init_db():
         )
     ''')
     
-    # جدول صلاحيات الأدمن الفرعي لكل تخصص ومستوى (مثال: cyber_1, it_2, arch_3)
+    # جدول صلاحيات الأدمن الفرعي لكل تخصص ومستوى
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS admin_permissions (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -298,13 +298,12 @@ def admin_sections_router(call):
     conn = get_db()
     cursor = conn.cursor()
 
-    # القائمة الرئيسية للأدمن
     if call.data == "adm_back_main":
         admin_main_panel_edit(call)
         conn.close()
         return
 
-    # التوجه لقائمة مستويات الأمن السيبراني
+    # مستويات الأمن السيبراني (أول، ثانٍ، ثالث، رابع)
     if call.data == "adm_fac_cyber":
         markup = types.InlineKeyboardMarkup(row_width=1)
         markup.add(
@@ -316,7 +315,6 @@ def admin_sections_router(call):
         )
         bot.edit_message_text("🛡️ **إدارة قسم الأمن السيبراني:**\nاختر المستوى المطلوب لإدارته وتحكم بمحتوياته:", call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode="Markdown")
 
-    # التوجه لقائمة مستويات تقنية المعلومات
     elif call.data == "adm_fac_it":
         markup = types.InlineKeyboardMarkup(row_width=1)
         markup.add(
@@ -328,7 +326,6 @@ def admin_sections_router(call):
         )
         bot.edit_message_text("💻 **إدارة قسم تقنية المعلومات (IT):**\nاختر المستوى المطلوب لإدارته وتحكم بمحتوياته:", call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode="Markdown")
 
-    # التوجه لقائمة مستويات الهندسة المعمارية
     elif call.data == "adm_fac_arch":
         markup = types.InlineKeyboardMarkup(row_width=1)
         markup.add(
@@ -340,11 +337,10 @@ def admin_sections_router(call):
         )
         bot.edit_message_text("🏛️ **إدارة قسم الهندسة المعمارية:**\nاختر المستوى المطلوب لإدارته وتحكم بمحتوياته:", call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode="Markdown")
 
-    # التحكم الخاص بمستوى محدد داخل التخصص
     elif call.data.startswith("adm_lvl_"):
         parts = call.data.split("_")
-        prefix = parts[2] # cyber, it, arch
-        lvl = parts[3] # 1, 2, 3, 4
+        prefix = parts[2] 
+        lvl = parts[3] 
         sec_key = f"{prefix}_{lvl}"
         
         if not is_owner(user_id) and not has_section_permission(user_id, sec_key):
@@ -361,7 +357,6 @@ def admin_sections_router(call):
         )
         bot.edit_message_text(f"⚙️ **لوحة تحكم مشرف: {fac_names.get(prefix)} - المستوى {lvl}**\nاختر العملية الإدارية المطلوبة:", call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode="Markdown")
 
-    # إدارة العام (الطلاب والصلاحيات والإذاعة)
     elif call.data == "adm_general_mgmt":
         if not is_owner(user_id):
             bot.answer_callback_query(call.id, "❌ هذا القسم مخصص لمالك البوت فقط!", show_alert=True)
