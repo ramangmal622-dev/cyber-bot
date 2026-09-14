@@ -116,7 +116,6 @@ def send_welcome(message):
     conn = get_db()
     cursor = conn.cursor()
     
-    # تحديث أو إدراج المستخدم مع فرض صلاحية الأدمن إذا كان هو المالك
     admin_val = 1 if user_id == OWNER_ID else 0
     
     cursor.execute("SELECT is_banned FROM users WHERE user_id = ?", (user_id,))
@@ -222,7 +221,8 @@ def admin_main_panel(message):
     bot.send_message(message.chat.id, "👑 **لوحة التحكم الإدارية المركزية:**\nاختر القسم المطلوب للتنفيذ:", reply_markup=markup, parse_mode="Markdown")
 
 
-@bot.callback_query_handler(func=lambda call: call.data.startswith("adm_") or call.data.startswith("file_") or call.data.startswith("user_"))
+# معالج أزرار لوحة التحكم الأساسية التي تبدأ بـ adm_ فقط
+@bot.callback_query_handler(func=lambda call: call.data.startswith("adm_"))
 def admin_sub_callbacks(call):
     user_id = call.from_user.id
     if not is_admin(user_id):
@@ -311,8 +311,13 @@ def admin_main_panel_edit(call):
     )
     bot.edit_message_text("👑 **لوحة التحكم الإدارية المركزية:**\nاختر القسم المطلوب للتنفيذ:", call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode="Markdown")
 
+# معالج مستقل ومباشر لزر إضافة ملف جديد
 @bot.callback_query_handler(func=lambda call: call.data == "file_add_step")
 def ask_file_details(call):
+    if not is_admin(call.from_user.id):
+        bot.answer_callback_query(call.id, "غير مأذون لك!", show_alert=True)
+        return
+    bot.answer_callback_query(call.id)
     msg = bot.send_message(call.message.chat.id, "📤 أرسل الآن الملف (مستند، PDF، أو محاضرة) مع كتابة اسم القسم واسم الأستاذ في وصف الملف (Caption).")
     bot.register_next_step_handler(msg, save_uploaded_file)
 
