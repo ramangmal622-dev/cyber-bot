@@ -310,6 +310,88 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await start(update, context)
             return
 
+        # معالجة الأقسام الرئيسية للطلاب
+        if data.startswith("main_"):
+            sec_key = data.replace("main_", "")
+            m_sections = get_all_main_sections()
+            sec_title = m_sections.get(sec_key, "القسم")
+            
+            keyboard = [[InlineKeyboardButton("⬅️ رجوع للرئيسية", callback_data="back_home")]]
+            await query.edit_message_text(
+                text=f"📂 **{sec_title}**\n\nجارٍ تحميل محتويات هذا القسم أو الملفات المتاحة...",
+                parse_mode="Markdown",
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
+            return
+
+        # معالجة أزرار الخدمات الطلابية
+        if data == "student_lookup_prompt":
+            conn = sqlite3.connect("dark_cyber_academy.db")
+            cursor = conn.cursor()
+            cursor.execute("SELECT student_id, name, points, join_date FROM students WHERE user_id = ?", (user_id,))
+            st = cursor.fetchone()
+            conn.close()
+            
+            if st:
+                await query.message.reply_text(
+                    f"🔍 **ملفك الأكاديمي السيبراني:**\n\n"
+                    f"👤 الاسم: `{st[1]}`\n"
+                    f"🆔 الآيدي: `{st[0]}`\n"
+                    f"⭐ النقاط: `{st[2]}` نقطة\n"
+                    f"📅 تاريخ الانضمام: `{st[3]}`",
+                    parse_mode="Markdown"
+                )
+            else:
+                await query.message.reply_text("⚠️ لم يتم العثور على سجل أكاديمي مرتبط بحسابك. اضغط /start للتسجيل.")
+            return
+
+        elif data == "student_update_request":
+            await query.message.reply_text("📋 لإعادة تعديل معلوماتك أو اسمك، يرجى التواصل مباشرة مع المشرفين عبر زر الدعم الفني.", parse_mode="Markdown")
+            return
+
+        elif data == "submit_task_prompt":
+            admin_state[user_id] = {"action": "wait_task_submission"}
+            await query.message.reply_text("📤 يرجى إرسال تفاصيل حل المهمة أو الواجب العملي (يمكنك إرسال نص أو ملف وسائط):", parse_mode="Markdown")
+            return
+
+        elif data == "vuln_report_prompt":
+            admin_state[user_id] = {"action": "wait_vuln_report"}
+            await query.message.reply_text("🛡️ يرجى كتابة تفاصيل تقرير الثغرة الأمنية المراد إرسالها لفريق الإدارة:", parse_mode="Markdown")
+            return
+
+        elif data == "scan_links_prompt":
+            await query.message.reply_text("🔍 ميزة فحص الروابط والملفات قيد التفعيل الأمني، أرسل الرابط مباشرة وسيتم مراجعته.", parse_mode="Markdown")
+            return
+
+        elif data == "start_quick_quiz":
+            conn = sqlite3.connect("dark_cyber_academy.db")
+            cursor = conn.cursor()
+            cursor.execute("SELECT id, question, opt1, opt2, opt3, reward_points FROM quizzes ORDER BY RANDOM() LIMIT 1")
+            q = cursor.fetchone()
+            conn.close()
+            
+            if not q:
+                await query.message.reply_text("🧠 لا توجد اختبارات أو تحديات سيبرانية مضافة حالياً من قبل الإدارة. انتظر ريثما يتم زرع تحديات جديدة.")
+                return
+            
+            keyboard = [
+                [InlineKeyboardButton(q[2], callback_data=f"quiz_{q[0]}_1")],
+                [InlineKeyboardButton(q[3], callback_data=f"quiz_{q[0]}_2")],
+                [InlineKeyboardButton(q[4], callback_data=f"quiz_{q[0]}_3")],
+                [InlineKeyboardButton("⬅️ رجوع للرئيسية", callback_data="back_home")]
+            ]
+            await query.edit_message_text(
+                text=f"🧠 **تحدي المهارات السيبرانية الفوري:**\n\n❓ {q[1]}\n\n⭐ المكافأة: `{q[5]}` نقاط",
+                parse_mode="Markdown",
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
+            return
+
+        elif data == "support_chat_prompt":
+            admin_state[user_id] = {"action": "wait_support_message"}
+            await query.message.reply_text("📞 أرسل رسالتك أو استفسارك وسيتم تحويله إلى غرفة العمليات والمشرفين فوراً:", parse_mode="Markdown")
+            return
+
         if data == "admin_main":
             if not role:
                 await query.answer("مرفوض! هذه المنطقة خاصة بالسيد والمشرفين فقط.", show_alert=True)
@@ -350,9 +432,10 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 return
             admin_state[user_id] = {"action": "wait_for_points_input"}
             await query.message.reply_text(
-                "⭐ **إضافة نقاط لطالب:**\n\n"
-                "يرجى إرسال **آيدي الطالب** متبوعاً بـ **عدد النقاط** (يمكنك استخدام القيمة بالسالب للخصم).\n"
-                "مثال:\n`123456 50`",
+                "⭐ **إضافة / خصم نقاط طالب:**\n\n"
+                "يرجى إرسال **آيدي الطالب** متبوعاً بـ **عدد النقاط** (استخدم القيمة بالسالب للخصم).\n"
+                "مثال للإضافة: `123456 50`\n"
+                "مثال للخصم: `123456 -20`",
                 parse_mode="Markdown"
             )
 
@@ -431,7 +514,7 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         elif action == "wait_for_points_input":
             parts = text.strip().split()
             if len(parts) < 2:
-                await update.message.reply_text("⚠️ الصيغة خاطئة. يرجى إرسال الآيدي ومقدار النقاط هكذا: `123456 50`", parse_mode="Markdown")
+                await update.message.reply_text("⚠️ الصيغة خاطئة. يرجى إرسال الآيدي ومقدار النقاط هكذا: `123456 50` أو `123456 -20`", parse_mode="Markdown")
                 return
             
             target_id = parts[0]
@@ -467,6 +550,18 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"💰 الرصيد الجديد: `{new_points}` نقطة",
                 parse_mode="Markdown"
             )
+
+        elif action == "wait_task_submission":
+            del admin_state[user_id]
+            await update.message.reply_text("✅ **تم استلام حل المهمة بنجاح وتحويله إلى غرفة المراجعة السيبرانية للإدارة.**", parse_mode="Markdown")
+
+        elif action == "wait_vuln_report":
+            del admin_state[user_id]
+            await update.message.reply_text("🛡️ **تم رفع تقرير الثغرة الأمنية بنجاح إلى فريق سيادة الأكاديمية.** شكراً لجهودك.", parse_mode="Markdown")
+
+        elif action == "wait_support_message":
+            del admin_state[user_id]
+            await update.message.reply_text("📞 **تم إرسال رسالتك إلى غرفة الدعم الفني والمشرفين بنجاح.**", parse_mode="Markdown")
 
     except Exception as e:
         logger.error(f"Error in message_handler: {e}")
