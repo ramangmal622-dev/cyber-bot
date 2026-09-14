@@ -269,6 +269,12 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     data = query.data
     role = get_user_role(user_id)
 
+    if data == "back_home":
+        if user_id in admin_state:
+            del admin_state[user_id]
+        await start(update, context)
+        return
+
     if data == "student_lookup_prompt":
         admin_state[user_id] = {"action": "wait_student_query_id"}
         await query.message.reply_text("🔍 **الاستعلام الأكاديمي:**\nأرسل الآن **الآيدي الرقمي الخاص بك (المكون من 6 أرقام)**:")
@@ -331,7 +337,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     st_id, current_pts = st_row
                     new_pts = current_pts + points
                     cursor.execute("UPDATE students SET points = ? WHERE student_id = ?", (new_pts, st_id))
-                    conn.commit()  # <-- تم ضمان حفظ النقاط هنا
+                    conn.commit()
                     await query.edit_message_text(text=f"🔥 **إجابة عبقرية وصحيحة!**\nتمت إضافة +{points} نقطة لملفك السيبراني.")
                 else:
                     await query.edit_message_text(text="✅ إجابة صحيحة، لكنك غير مسجل كطالب رسمي في النظام.")
@@ -409,7 +415,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             
             new_pts = current_pts - p_cost
             cursor.execute("UPDATE students SET points = ? WHERE student_id = ?", (new_pts, st_id))
-            conn.commit()  # <-- تم ضمان حفظ عملية الخصم هنا
+            conn.commit()
             
         conn.close()
         
@@ -448,8 +454,141 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ]
         await query.edit_message_text(text=f"👑 **غرفة القيادة العليا (مستوى السيادة: {role}):**", reply_markup=InlineKeyboardMarkup(keyboard))
 
+    elif data == "manage_students_scores":
+        if not role:
+            await query.answer("مرفوض!", show_alert=True)
+            return
+        keyboard = [
+            [InlineKeyboardButton("➕ إضافة نقاط للطالب", callback_data="admin_add_points_prompt")],
+            [InlineKeyboardButton("➖ خصم نقاط من الطالب", callback_data="admin_sub_points_prompt")],
+            [InlineKeyboardButton("⬅️ رجوع", callback_data="admin_main")]
+        ]
+        await query.edit_message_text(text="🎓 **إدارة الطلاب والدرجات والتقييمات:**", reply_markup=InlineKeyboardMarkup(keyboard))
+
+    elif data == "admin_add_points_prompt":
+        if not role:
+            await query.answer("مرفوض!", show_alert=True)
+            return
+        admin_state[user_id] = {"action": "wait_admin_add_points_id"}
+        await query.message.reply_text("➕ **إضافة نقاط:**\nأرسل الآن **آيدي الطالب** المراد إضافة النقاط له:")
+
     elif data == "admin_view_logs":
         if role != "dark_lord":
             await query.answer("مرفوض! هذه الصلاحية للمالك حصرياً.", show_alert=True)
             return
-        # كود عرض السجلات...
+        conn = sqlite3.connect("dark_cyber_academy.db")
+        cursor = conn.cursor()
+        cursor.execute("SELECT admin_id, action_desc, timestamp FROM audit_logs ORDER BY id DESC LIMIT 15")
+        logs = cursor.fetchall()
+        conn.close()
+        
+        text = "📜 **آخر سجلات نشاطات المشرفين:**\n\n"
+        if not logs:
+            text += "لا توجد سجلات مسجلة حتى الآن."
+        else:
+            for l in logs:
+                text += f"👤 المشرف: `{l[0]}`\n⚡ الفعل: {l[1]}\n⏱️ الوقت: {l[2]}\n-------------------\n"
+        await query.message.reply_text(text)
+
+# معالج الرسائل النصية ومدخلات الإدارة والطلاب (هنا تم حل مشكلة الحفظ وعدم التوقف)
+async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    text = update.message.text
+    
+    if is_student_banned(user_id):
+        return
+
+    if user_id not in admin_state:
+        return
+
+    state = admin_state[user_id]
+    action = state.get("action")
+
+    # 1. التسجيل الذاتي للطالب الجديد
+    if action == "wait_self_registration_name":
+        student_id = generate_unique_student_id()
+        conn = sqlite3.connect("dark_cyber_academy.db")
+        cursor = conn.cursor()
+        try:
+            cursor.execute(
+                "INSERT INTO students (student_id, user_id, name, points) VALUES (?, ?, ?, ?)",
+                (student_id, user_id, text, 0)
+            )
+            conn.commit()
+            del admin_state[user_id]
+            await update.message.reply_text(
+                f"✅ **تم تسجيلك بنجاح في النظام السيبراني!**\n\n"
+                f"👤 الاسم: `{text}`\n"
+                f"🆔 الآيدي الخاص بك: `{student_id}`\n"
+                f"⭐ رصيدك الابتدائي: `0` نقطة\n\n"
+                f"احتفظ بالآيدي الخاص بك جيداً، يمكنك الآن استخدام لوحة التحكم بالأسفل.",
+                parse_mode="Markdown"
+            )
+            await start(update, context)
+        except Exception as e:
+            await update.message.reply_text(f"⚠️ حدث خطأ أثناء التسجيل: {e}")
+        finally:
+            conn.close()
+
+    # 2. إضافة نقاط للطالب من قبل المشرف (الخطوة الأولى: استقبال الآيدي)
+    elif action == "wait_admin_add_points_id":
+        conn = sqlite3.connect("dark_cyber_academy.db")
+        cursor = conn.cursor()
+        cursor.execute("SELECT student_id, name, points FROM students WHERE student_id = ?", (text.strip(),))
+        st = cursor.fetchone()
+        conn.close()
+        
+        if not st:
+            await update.message.reply_text("❌ لم يتم العثور على طالب بهذا الآيدي. أرسل الآيدي الصحيح مجدداً:")
+            return
+            
+        admin_state[user_id] = {"action": "wait_admin_add_points_value", "target_student_id": st[0]}
+        await update.message.reply_text(f"✅ تم العثور على الطالب: **{st[1]}** (الرصيد الحالي: {st[2]})\n\nأرسل الآن **عدد النقاط** المراد إضافتها (رقم صحيح):")
+
+    # 3. إضافة نقاط للطالب من قبل المشرف (الخطوة الثانية: استقبال القيمة وحفظها بقاعدة البيانات)
+    elif action == "wait_admin_add_points_value":
+        target_sid = state.get("target_student_id")
+        try:
+            points_to_add = int(text.strip())
+        except ValueError:
+            await update.message.reply_text("❌ يرجى إرسال رقم صحيح فقط لعدد النقاط:")
+            return
+            
+        conn = sqlite3.connect("dark_cyber_academy.db")
+        cursor = conn.cursor()
+        cursor.execute("SELECT points, name FROM students WHERE student_id = ?", (target_sid,))
+        st = cursor.fetchone()
+        
+        if st:
+            current_pts, st_name = st
+            new_pts = current_pts + points_to_add
+            cursor.execute("UPDATE students SET points = ? WHERE student_id = ?", (new_pts, target_sid))
+            conn.commit()  # <-- الحفظ الإجباري لضمان ثبات النقاط
+            
+            log_admin_action(user_id, f"إضافة {points_to_add} نقطة للطالب {st_name} ({target_sid})")
+            del admin_state[user_id]
+            
+            await update.message.reply_text(
+                f"✅ **تمت إضافة النقاط بنجاح وثزبت في النظام!**\n\n"
+                f"👤 الطالب: {st_name}\n"
+                f"➕ النقاط المضافة: +{points_to_add}\n"
+                f"⭐ الرصيد الجديد: `{new_pts}` نقطة"
+            )
+        else:
+            await update.message.reply_text("❌ حدث خطأ، لم يتم العثور على الطالب في قاعدة البيانات.")
+            
+        conn.close()
+        await start(update, context)
+
+def main():
+    app = ApplicationBuilder().token(BOT_TOKEN).build()
+    
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CallbackQueryHandler(button_handler))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message_handler))
+    
+    print("Bot is running...")
+    app.run_polling()
+
+if __name__ == "__main__":
+    main()
