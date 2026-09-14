@@ -325,6 +325,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 [InlineKeyboardButton("📤 رفع أداة أو ملف استخباراتي جديد", callback_data="admin_upload_file")],
                 [InlineKeyboardButton("🗑️ حذف ملف أو عنصر من الأرشيف", callback_data="admin_delete_file")],
                 [InlineKeyboardButton("🎓 إدارة الطلاب والتقييمات والدرجات", callback_data="admin_manage_students")],
+                [InlineKeyboardButton("⭐ إضافة / تعديل نقاط طالب", callback_data="admin_add_points_prompt")],
                 [InlineKeyboardButton("📬 فحص ومراجعة الواجبات المقدمة", callback_data="admin_view_submissions")],
                 [InlineKeyboardButton("🛡️ مراجعة تقارير الثغرات الأمنية", callback_data="admin_view_vulns")],
                 [InlineKeyboardButton("📞 متابعة تذاكر دعم ورسائل الرعية", callback_data="admin_support_tickets")],
@@ -342,6 +343,17 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 text=f"👑 **غرفة القيادة العليا (مستوى السيادة: `{role}`):**\nاختر العملية الإدارية المطلوبة:",
                 parse_mode="Markdown",
                 reply_markup=InlineKeyboardMarkup(keyboard)
+            )
+
+        elif data == "admin_add_points_prompt":
+            if not role:
+                return
+            admin_state[user_id] = {"action": "wait_for_points_input"}
+            await query.message.reply_text(
+                "⭐ **إضافة نقاط لطالب:**\n\n"
+                "يرجى إرسال **آيدي الطالب** متبوعاً بـ **عدد النقاط** (يمكنك استخدام القيمة بالسالب للخصم).\n"
+                "مثال:\n`123456 50`",
+                parse_mode="Markdown"
             )
 
         elif data == "admin_view_audit_logs":
@@ -415,6 +427,47 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await update.message.reply_text(f"⚠️ حدث خطأ أثناء التسجيل: {e}")
             finally:
                 conn.close()
+
+        elif action == "wait_for_points_input":
+            parts = text.strip().split()
+            if len(parts) < 2:
+                await update.message.reply_text("⚠️ الصيغة خاطئة. يرجى إرسال الآيدي ومقدار النقاط هكذا: `123456 50`", parse_mode="Markdown")
+                return
+            
+            target_id = parts[0]
+            try:
+                points_to_add = int(parts[1])
+            except ValueError:
+                await update.message.reply_text("⚠️ مقدار النقاط يجب أن يكون رقماً صحيحاً.")
+                return
+
+            conn = sqlite3.connect("dark_cyber_academy.db")
+            cursor = conn.cursor()
+            cursor.execute("SELECT name, points FROM students WHERE student_id = ?", (target_id,))
+            st_row = cursor.fetchone()
+            
+            if not st_row:
+                conn.close()
+                await update.message.reply_text(f"❌ لم يتم العثور على طالب بالآيدي: `{target_id}`", parse_mode="Markdown")
+                return
+
+            new_points = st_row[1] + points_to_add
+            cursor.execute("UPDATE students SET points = ? WHERE student_id = ?", (new_points, target_id))
+            conn.commit()
+            conn.close()
+
+            del admin_state[user_id]
+            log_admin_action(user_id, f"تعديل نقاط الطالب {target_id} بقيمة {points_to_add}")
+            
+            await update.message.reply_text(
+                f"✅ **تم تحديث نقاط الطالب بنجاح!**\n\n"
+                f"👤 اسم الطالب: `{st_row[0]}`\n"
+                f"🆔 الآيدي: `{target_id}`\n"
+                f"⭐ النقاط المضافة/المخصومة: `{points_to_add}`\n"
+                f"💰 الرصيد الجديد: `{new_points}` نقطة",
+                parse_mode="Markdown"
+            )
+
     except Exception as e:
         logger.error(f"Error in message_handler: {e}")
 
