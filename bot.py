@@ -3,7 +3,7 @@ import sqlite3
 import logging
 import random
 import threading
-from http.server import HTTPServer, BaseHTTPRequestHandler
+from flask import Flask
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     ApplicationBuilder,
@@ -14,20 +14,61 @@ from telegram.ext import (
     filters,
 )
 
-# إعداد خادم ويب بسيط لمنصة Railway لكي تظل الحاوية مفتوحة
-class SimpleHandler(BaseHTTPRequestHandler):
-    def do_GET(self):
-        self.send_response(200)
-        self.end_headers()
-        self.wfile.write(b"Cyber-Ops Empire Bot v4.6 is active and running!")
+# ==========================================
+# 1. إعداد خادم الويب (Flask Server)
+# ==========================================
+app_web = Flask(__name__)
 
-def run_web_server():
+@app_web.route("/")
+def home():
+    return """
+    <!DOCTYPE html>
+    <html lang="ar" dir="rtl">
+        <head>
+            <meta charset="UTF-8">
+            <title>Cyber-Ops Empire Dashboard</title>
+            <style>
+                body {
+                    background-color: #0d1117;
+                    color: #58a6ff;
+                    font-family: Arial, sans-serif;
+                    text-align: center;
+                    padding-top: 60px;
+                }
+                .container {
+                    border: 1px solid #30363d;
+                    padding: 30px;
+                    border-radius: 12px;
+                    display: inline-block;
+                    background-color: #161b22;
+                    box-shadow: 0 0 15px rgba(88, 166, 255, 0.2);
+                }
+                h1 { color: #58a6ff; margin-bottom: 10px; }
+                p { color: #8b949e; font-size: 1.1em; }
+                .status { color: #3fb950; font-weight: bold; }
+            </style>
+        </head>
+        <body>
+            <div class="container">
+                <h1>🛡️ أكاديمية الأمن السيبراني (Cyber-Ops Empire v4.6) 🛡️</h1>
+                <p>حالة السيرفر: <span class="status">● متصل ويعمل بكفاءة على Railway (Flask Webserver Active)</span></p>
+                <hr style="border: 0.5px solid #30363d; margin: 20px 0;">
+                <p>جميع حقوق إدارة وتأمين الأنظمة محفوظة للأكاديمية.</p>
+            </div>
+        </body>
+    </html>
+    """
+
+def run_flask_server():
     port = int(os.environ.get("PORT", 8080))
-    server = HTTPServer(("0.0.0.0", port), SimpleHandler)
-    server.serve_forever()
+    app_web.run(host="0.0.0.0", port=port, debug=False, use_reloader=False)
 
-threading.Thread(target=run_web_server, daemon=True).start()
+# تشغيل خادم الويب في خلفية مستقلة
+threading.Thread(target=run_flask_server, daemon=True).start()
 
+# ==========================================
+# 2. الإعدادات العامة للبوت وقواعد البيانات
+# ==========================================
 logging.basicConfig(
     format="[DARK-LOG] %(asctime)s - %(levelname)s - %(message)s",
     level=logging.INFO
@@ -36,10 +77,6 @@ logger = logging.getLogger(__name__)
 
 OWNER_ID = 8083038345
 BOT_TOKEN = "8969629386:AAFbTJaSmJ-9ADKjSLazu4LXfvxFyExd35o"
-
-# الرابط الخاص بك على Railway
-WEBHOOK_URL = "https://cyber-bot-production-e452.up.railway.app"
-PORT = int(os.environ.get("PORT", 8080))
 
 def init_db():
     conn = sqlite3.connect("dark_cyber_academy.db")
@@ -190,25 +227,9 @@ def get_all_main_sections():
     conn.close()
     return sections
 
-base_sub_sections = {
-    "pdf": {"net_sec": "📁 تأمين الشبكات والبروتوكولات المعقدة", "web_sec": "📁 ثغرات الـ Web العميقة والأمن العالي", "crypto": "📁 علم التشفير المتقدم والـ ECC"},
-    "tools": {"recon": "🛠️ أدوات الاستطلاع والـ OSINT السرية", "exploit": "🛠️ إطارات وكور ثغرات الـ Zero-Day", "defend": "🛠️ أنظمة الدفاع والتصدّي الذكي"},
-    "labs": {"ctf_easy": "💻 تحديات المبتدئين (Easy CTF)", "ctf_hard": "💻 تحديات الماستر (Advanced Pwn/Rev)", "forensics": "💻 التحقيق الجنائي الرقمي والطب الشرعي"},
-    "videos": {"linux_adv": "🎬 احتراف هندسة لينكس والسكربتات الخفية", "pentest_full": "🎬 دبلوم اختبار الهجوم السيبراني الشامل"},
-    "malware": {"static_an": "🛡️ التحليل الثابت العكسي للبرمجيات", "dynamic_an": "🛡️ التحليل الديناميكي والعزل في الـ Sandbox"},
-    "extra": {"general_files": "📁 الأرشيف العام والملفات الإضافية"}
-}
-
-def get_all_sub_sections(main_type):
-    subs = dict(base_sub_sections.get(main_type, {}))
-    conn = sqlite3.connect("dark_cyber_academy.db")
-    cursor = conn.cursor()
-    cursor.execute("SELECT sec_key, sec_name FROM custom_sub_sections WHERE main_type = ?", (main_type,))
-    for row in cursor.fetchall():
-        subs[row[0]] = row[1]
-    conn.close()
-    return subs
-
+# ==========================================
+# 3. معالجة أوامر وأزرار البوت
+# ==========================================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     if is_student_banned(user_id):
@@ -355,7 +376,7 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             current_pts, st_name = st
             new_pts = current_pts + points_to_add
             cursor.execute("UPDATE students SET points = ? WHERE student_id = ?", (new_pts, target_sid))
-            conn.commit()  # الحفظ الإجباري لضمان ثبات النقاط
+            conn.commit()
             
             log_admin_action(user_id, f"إضافة {points_to_add} نقطة للطالب {st_name} ({target_sid})")
             del admin_state[user_id]
@@ -368,6 +389,9 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         conn.close()
         await start(update, context)
 
+# ==========================================
+# 4. نقطة البدء التشغيلية
+# ==========================================
 def main():
     app = ApplicationBuilder().token(BOT_TOKEN).build()
     
@@ -375,14 +399,8 @@ def main():
     app.add_handler(CallbackQueryHandler(button_handler))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message_handler))
     
-    print("Bot is running via Webhook...")
-    
-    # تشغيل الـ Webhook الصحيح لمنع التكرار واستقرار السيرفر
-    app.run_webhook(
-        listen="0.0.0.0",
-        port=PORT,
-        webhook_url=f"{WEBHOOK_URL}/{BOT_TOKEN}"
-    )
+    print("Starting Flask Web Server & Telegram Bot Polling simultaneously...")
+    app.run_polling()
 
 if __name__ == "__main__":
     main()
