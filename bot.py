@@ -306,7 +306,11 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             [InlineKeyboardButton("📊 السجلات وأنشطة النظام", callback_data="admin_view_audit_logs")],
             [InlineKeyboardButton("⬅️ رجوع للرئيسية", callback_data="back_home")]
         ]
-        await query.edit_message_text(text=f"👑 **غرفة القيادة العليا (مستوى السيادة: {role}):**", reply_markup=InlineKeyboardMarkup(keyboard))
+        await query.edit_message_text(
+            text=f"👑 **غرفة القيادة العليا (مستوى السيادة: `{role}`):**",
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
 
     elif data == "admin_add_points_prompt":
         if not role:
