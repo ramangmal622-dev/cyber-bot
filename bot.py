@@ -11,10 +11,10 @@ except ImportError:
 import sqlite3
 from telebot import types
 
-TOKEN = "YOUR_BOT_TOKEN_HERE"
+TOKEN = "8969629386:AAFbTJaSmJ-9ADKjSLazu4LXfvxFyExd35o"
 bot = telebot.TeleBot(TOKEN)
 
-# الآيدي الخاص بالأدمن الأساسي
+# الآيدي الخاص بالأدمن الأساسي (يمكنك استبداله بآيدي حسابك الحقيقي على تيليجرام)
 OWNER_ID = 123456789  
 
 # ==================== قاعدة البيانات والجدولة (Database Setup) ====================
