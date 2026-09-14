@@ -115,19 +115,26 @@ def send_welcome(message):
 
     conn = get_db()
     cursor = conn.cursor()
+    
+    # تحديث أو إدراج المستخدم مع فرض صلاحية الأدمن إذا كان هو المالك
+    admin_val = 1 if user_id == OWNER_ID else 0
+    
     cursor.execute("SELECT is_banned FROM users WHERE user_id = ?", (user_id,))
     row = cursor.fetchone()
     
-    if row and row[0] == 1:
+    if row and row[0] == 1 and user_id != OWNER_ID:
         bot.reply_to(message, "❌ عذراً، تم حظرك من استخدام هذا البوت.")
         conn.close()
         return
         
     if not row:
-        admin_val = 1 if user_id == OWNER_ID else 0
-        cursor.execute("INSERT OR IGNORE INTO users (user_id, username, fullname, is_admin) VALUES (?, ?, ?, ?)",
+        cursor.execute("INSERT INTO users (user_id, username, fullname, is_admin) VALUES (?, ?, ?, ?)",
                        (user_id, username, fullname, admin_val))
-        conn.commit()
+    else:
+        if user_id == OWNER_ID:
+            cursor.execute("UPDATE users SET is_admin = 1 WHERE user_id = ?", (user_id,))
+            
+    conn.commit()
     conn.close()
 
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
@@ -215,7 +222,7 @@ def admin_main_panel(message):
     bot.send_message(message.chat.id, "👑 **لوحة التحكم الإدارية المركزية:**\nاختر القسم المطلوب للتنفيذ:", reply_markup=markup, parse_mode="Markdown")
 
 
-@bot.callback_query_handler(func=lambda call: call.data.startswith("adm_"))
+@bot.callback_query_handler(func=lambda call: call.data.startswith("adm_") or call.data.startswith("file_") or call.data.startswith("user_"))
 def admin_sub_callbacks(call):
     user_id = call.from_user.id
     if not is_admin(user_id):
@@ -288,9 +295,21 @@ def admin_sub_callbacks(call):
         bot.edit_message_text(stats, call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode="Markdown")
 
     elif call.data == "adm_back_main":
-        admin_main_panel(call.message)
+        admin_main_panel_edit(call)
 
     conn.close()
+
+def admin_main_panel_edit(call):
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        types.InlineKeyboardButton("📁 إدارة الملفات والمحتوى", callback_data="adm_sub_content"),
+        types.InlineKeyboardButton("👥 إدارة الطلاب والنقاط", callback_data="adm_sub_users"),
+        types.InlineKeyboardButton("📢 الإذاعة والتنبيهات", callback_data="adm_broadcast_start"),
+        types.InlineKeyboardButton("📋 سجلات النظام (Logs)", callback_data="adm_logs_view"),
+        types.InlineKeyboardButton("🛠️ وضع الصيانة", callback_data="adm_toggle_maint"),
+        types.InlineKeyboardButton("📊 إحصائيات البوت", callback_data="adm_statistics")
+    )
+    bot.edit_message_text("👑 **لوحة التحكم الإدارية المركزية:**\nاختر القسم المطلوب للتنفيذ:", call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode="Markdown")
 
 @bot.callback_query_handler(func=lambda call: call.data == "file_add_step")
 def ask_file_details(call):
