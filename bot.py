@@ -226,14 +226,12 @@ def show_level_content_and_controls(call):
     res = cursor.fetchone()
     fac_title = res[0] if res else prefix
     
-    # جلب الأزرار المضافة خصيصاً لهذا المستوى (مثل أساتذة المواد المضافين يدوياً)
     cursor.execute("SELECT id, button_name FROM level_buttons WHERE category = ?", (category,))
     custom_btns = cursor.fetchall()
     conn.close()
     
     markup = types.InlineKeyboardMarkup(row_width=1)
     
-    # عرض الأزرار المضافة خصيصاً للمستوى
     for b in custom_btns:
         markup.add(types.InlineKeyboardButton(f"👨‍🏫 {b[1]}", callback_data=f"view_cbtn_{b[0]}"))
         
@@ -389,7 +387,6 @@ def admin_main_panel(message):
 
     markup = types.InlineKeyboardMarkup(row_width=1)
     
-    # توليد أزرار الأقسام الرئيسية ديناميكياً في لوحة التحكم
     for f in facs:
         markup.add(types.InlineKeyboardButton(f"🛡️ إدارة {f[1]}", callback_data=f"adm_fac_{f[0]}"))
         
@@ -419,7 +416,6 @@ def admin_sections_router(call):
         conn.close()
         return
 
-    # طلب إضافة قسم رئيسي جديد
     if call.data == "adm_add_faculty":
         bot.answer_callback_query(call.id)
         msg = bot.send_message(call.message.chat.id, "✍️ أرسل **مفتاح القسم بالإنجليزية** و **اسم القسم بالعربي** (مثال:\n`med كلية الطب`):")
@@ -427,7 +423,6 @@ def admin_sections_router(call):
         conn.close()
         return
 
-    # إدارة الأقسام المضافة ديناميكياً
     if call.data.startswith("adm_fac_"):
         prefix = call.data.replace("adm_fac_", "")
         cursor.execute("SELECT fac_name FROM faculties WHERE fac_key = ?", (prefix,))
@@ -447,7 +442,6 @@ def admin_sections_router(call):
         except Exception:
             pass
 
-    # مستويات الإدارة لكل قسم (يتضمن زر إضافة زر/دكتور خاص بالمستوى)
     elif call.data.startswith("adm_lvl_"):
         _, _, prefix, lvl = call.data.split("_")
         sec_key = f"{prefix}_{lvl}"
@@ -468,7 +462,6 @@ def admin_sections_router(call):
         except Exception:
             pass
 
-    # طلب إضافة زر دكتور أو مادة فرعي داخل المستوى
     elif call.data.startswith("btn_lvl_add_"):
         sec_key = call.data.replace("btn_lvl_add_", "")
         bot.answer_callback_query(call.id)
@@ -483,7 +476,6 @@ def admin_sections_router(call):
     elif call.data.startswith("up_lvl_"):
         sec_key = call.data.replace("up_lvl_", "")
         
-        # جلب الأزرار الخاصة بالمستوى بالإضافة للأساتذة العامين
         cursor.execute("SELECT button_name FROM level_buttons WHERE category = ?", (sec_key,))
         lvl_btns = cursor.fetchall()
         cursor.execute("SELECT name FROM instructors")
@@ -516,7 +508,6 @@ def admin_sections_router(call):
         conn.commit()
         bot.answer_callback_query(call.id, "🗑️ تم حذف جميع ملفات هذا المستوى بنجاح!", show_alert=True)
 
-    # إدارة الطلاب والنقاط
     elif call.data == "adm_users_mgmt":
         markup = types.InlineKeyboardMarkup(row_width=1)
         markup.add(
@@ -545,7 +536,6 @@ def admin_sections_router(call):
         msg = bot.send_message(call.message.chat.id, "✍️ أرسل **آيدي الطالب** لحظره أو إلغاء حظره:")
         bot.register_next_step_handler(msg, process_ban_user)
 
-    # إدارة الصلاحيات
     elif call.data == "adm_perms_mgmt":
         if not is_owner(user_id):
             bot.answer_callback_query(call.id, "❌ مخصص لمالك البوت فقط!", show_alert=True)
@@ -799,7 +789,7 @@ if __name__ == "__main__":
 
     while True:
         try:
-            # تم ضبط الاتصال هنا بشكل سليم تماماً لتجنب ظهور أي أخطاء في السجلات
+            # تم إصلاح الاستدعاء هنا لمنع تداخل المعاملات (non_stop) نهائياً
             bot.infinity_polling(timeout=60, long_polling_timeout=60)
         except Exception as e:
             print(f"⚠️ تنبيه إعادة اتصال: {e}")
